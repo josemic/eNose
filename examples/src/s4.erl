@@ -4,8 +4,8 @@
 -export([s/0]).
 s()->
     application:start(sasl),
-    Res = application:start(epcap),
-    io:format("epcap_app started Res: ~p~n",[Res]),	
+    Res = application:start(epcap_port),
+    io:format("epcap_port_app started Res: ~p~n",[Res]),	
     Res1 = application:start(content),
     io:format("content started Res: ~p~n",[Res1]),	
     %%dbg:tracer(),
