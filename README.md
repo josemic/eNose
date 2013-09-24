@@ -8,7 +8,7 @@ eNose
 
 ## QUICK SETUP
 
-    cd epcap
+    cd eNose
     make all
         
     # Allow your user to epcap with root privs
@@ -20,9 +20,9 @@ eNose
     
     application:start(sasl).
 
-    % start epcap application in epcap_app folder
+    % start epcap_port application in epcap_port_app folder
     % listens for tcp, udp etc. packages
-    application:start(epcap). 
+    application:start(epcap_port). 
 
     % start content application in content_app folder
     % is an app that filters received content based on given rules
@@ -46,25 +46,25 @@ eNose
     observer:start(). % go to tab "Application", optional
     % if you use an older Erlang release try appmon:start().
 
-    {ok, Result1} = rule:start([{epcap,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}]}, {message, "Found:*www.heise.de*Meldung*"}]).
+    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}]}, {message, "Found:*www.heise.de*Meldung*"}]).
 
     or
 
     AlwaysMatchFun = fun(Payload) -> no_fail end. % matches every packet received
 
-    {ok, Result2} = rule:start([{epcap,[{filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, AlwaysMatchFun}]}, {message, "Received an icmp or tcp (on port 80) package"}]). 
+    {ok, Result2} = rule:start([{epcap_port,[{filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, AlwaysMatchFun}]}, {message, "Received an icmp or tcp (on port 80) package"}]). 
 
     % Feel free to use other matchfuns
 
-    % Above starts the epcap_app with the parameter and pipes the received packages into the content app
+    % Above starts the epcap_port app with the parameter and pipes the received packages into the content app
 
     NeverMatchFun = fun(Payload) -> fail end. % this does not make much sense, except it's an example
 
-    {ok, Result3} = rule:start([{epcap,[{filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, NeverMatchFun}]}, {message, "This should never ocurr!!!"}]).
+    {ok, Result3} = rule:start([{epcap_port,[{filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, NeverMatchFun}]}, {message, "This should never ocurr!!!"}]).
     
-    % Note, as long as the epcap parameter do not change the same instance of the epcap_worker is used (see observer -> Applications)
+    % Note, as long as the epcap_port parameter do not change the same instance of the epcap_port_worker is used (see observer -> Applications)
     % Now stop this (works in any order):
-    rule:stop(Result1). % watch the observer application tab
+    rule:stop(Result1). % watch the observers application tab
     rule:stop(Result2).
     rule:stop(Result3).
 
@@ -73,11 +73,10 @@ eNose
 ## USAGE
 
     {ok, Roleback} = rule:start([{AppName1,[{key1, value1}, {key2, value2}, ...]}, {AppName2,[{key1, value1}, {key2, value2}, ...]}, ..., {AppNameN,[{key1, value1}, {key2, value2}]}).
-    epcap:start() -> {ok, pid()}
-    epcap:start(Args) -> {ok, pid()}
+
     
-    1) epcap:
-        directoy: epcap_app 
+    1) epcap_port:
+        directoy: epcap_port_app 
         
         Types   Args = [Options]
                 Options = {chroot, string()} | {group, string()} | {interface, string()} | {promiscuous, boolean()} |
@@ -102,7 +101,8 @@ eNose
 
 
 ## PF_RING
-
+        This section refers to epcap, not to the epcap_port app and is automatically downloaded 
+        by rebar and found here: "eNose/deps/epcap"
         In case you want to compile epcap with PF_RING support,
         just specify the path to the libpfring and modified libpcap libraries
         via shell variable PFRING.
@@ -113,13 +113,18 @@ eNose
 
         To complete the configuration you need to set up the cluster_id option.
         The value of the cluster_id option is integer and should be in range between 0 and 255.
-
+        
+        
             epcap:start([{interface, "lo"}, {cluster_id, 2}]).
 
+	E.g. 
+	rule:start([{epcap_port,[{interface, "lo"}, {cluster_id, 2}, {filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, NeverMatchFun}]}, {message, "This should never ocurr!!!"}])
         You can also specify the option cpu_affinity to set up CPU affinity for epcap port:
 
             epcap:start([{interface, "lo"}, {cluster_id, 2}, {cpu_affinity, "1,3,5-7"}]).
-
+	E.g. 
+	rule:start([{epcap_port,[{interface, "lo"}, {cluster_id, 2}, {cpu_affinity, "1,3,5-7"}, {filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, NeverMatchFun}]}, {message, "This should never ocurr!!!"}])
+	
 
 ## SCREENSHOT
 
@@ -160,7 +165,7 @@ Snort 2.0 Intrusion Detectionby Brian Caswell, Jeffrey Pusluns and Jay Beale fro
 
 ## CONTRIBUTORS
 
-This project would not be possible without the great work on Epcap:
+This project would not be possible without the great work on epcap:
 
 https://github.com/msantos/epcap
 
