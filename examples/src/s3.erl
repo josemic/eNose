@@ -5,9 +5,9 @@
 s()->
     application:start(sasl),
     Res = application:start(epcap_port),
-    io:format("epcap_app started Res: ~p~n",[Res]),	
+    io:format("epcap_port_app started Res: ~p~n",[Res]),	
     Res1 = application:start(content),
-    io:format("content started Res: ~p~n",[Res1]),	
+    io:format("content_app started Res: ~p~n",[Res1]),	
     %%dbg:tracer(),
     %%dbg:p(all,c),
     %%dbg:tpl(epcap_port_server, x),
@@ -25,6 +25,6 @@ s()->
 			E = parser_combinator_bitstring:pBetweenN(B, C,14),
 			parser_combinator_bitstring:parse(E,Payload) end,
 
-    Result1 = rule:start([{epcap,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}, {message, "Found: www.heise.de*Meldung*"}]}]),
+    Result1 = rule:start([{epcap_port,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}, {message, "Found: www.heise.de*Meldung*"}]}]),
     io:format("Result: ~p~n",[Result1]).
 

@@ -2,6 +2,6 @@
     {description, "content rule"},
     {vsn, "0.0.1"},
     {registered,[content_server, content_root_sup]},
-    {applications, [kernel, epcap]}, 
+    {applications, [kernel, epcap_port]}, 
     {mod, {content_app,[]}}
 ]}.

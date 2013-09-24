@@ -8,7 +8,7 @@ s()->
     %% stop 2 rules 
 
     application:start(sasl),
-    Res_epcap_start = application:start(epcap_port),
+    Res_epcap_port_start = application:start(epcap_port),
     io:format("epcap_port_app started Res: ~p~n",[Res_epcap_port_start]),	
     Res_content_start = application:start(content),
     io:format("content_app started Res: ~p~n",[Res_content_start]),	
