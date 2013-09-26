@@ -164,7 +164,7 @@ handle_cast(_Msg, State) ->
 
 
 handle_info({packet, DLT, Time, Len, Packet}, State) ->
-    [Ether, IP, Hdr, Payload] = epcap2_lib:decode(pkt:link_type(DLT), Packet),
+    [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
 
     {Saddr, Daddr, Proto} = case IP of
 				#ipv4{saddr = S, daddr = D, p = P} ->
@@ -178,30 +178,30 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 	fail ->
 	    ok;
 	_     ->
-	    error_logger:info_msg("Logging: Instance: ~p, PID: ~p, at ~p~n",[State#state.instance, self(),epcap2_lib:timestamp(Time)]),
+	    error_logger:info_msg("Logging: Instance: ~p, PID: ~p, at ~p~n",[State#state.instance, self(),epcap_port_lib:timestamp(Time)]),
 	    error_logger:info_msg("Message: ~p~n",[State#state.message]),
 	    error_logger:info_report([
 				      self(),	   
-				      {time, epcap2_lib:timestamp(Time)},
+				      {time, epcap_port_lib:timestamp(Time)},
 				      {caplen, byte_size(Packet)},
 				      {len, Len},
 				      {datalink, pkt:link_type(DLT)},
 
 						% Source
-				      {source_macaddr, string:join(epcap2_lib:ether_addr(Ether#ether.shost), ":")},
+				      {source_macaddr, string:join(epcap_port_lib:ether_addr(Ether#ether.shost), ":")},
 				      {source_address, inet_parse:ntoa(Saddr)},
-				      {source_port, epcap2_lib:port(sport, Hdr)},
+				      {source_port, epcap_port_lib:port(sport, Hdr)},
 
 						% Destination
-				      {destination_macaddr, string:join(epcap2_lib:ether_addr(Ether#ether.dhost), ":")},
+				      {destination_macaddr, string:join(epcap_port_lib:ether_addr(Ether#ether.dhost), ":")},
 				      {destination_address, inet_parse:ntoa(Daddr)},
-				      {destination_port, epcap2_lib:port(dport, Hdr)},
+				      {destination_port, epcap_port_lib:port(dport, Hdr)},
 
 				      {protocol, pkt:proto(Proto)},
-				      {protocol_header, epcap2_lib:header(Hdr)},
+				      {protocol_header, epcap_port_lib:header(Hdr)},
 
 				      {payload_bytes, byte_size(Payload)},
-				      {payload, epcap2_lib:payload(Payload)}
+				      {payload, epcap_port_lib:payload(Payload)}
 				     ])
     end,
     {noreply, State};
