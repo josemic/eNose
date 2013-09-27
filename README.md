@@ -13,7 +13,7 @@ eNose
         
     # Allow your user to epcap with root privs
     sudo visudo
-    youruser ALL = NOPASSWD: /path/to/epcap/priv/epcap
+    youruser ALL = NOPASSWD: /path/to/eNose/deps/epcap/priv/epcap
     
     erl $@ -boot start_sasl -pa $PWD/examples/ebin $PWD/rule/ebin $PWD/deps/*/ebin $PWD/content_app/ebin $PWD/epcap_port_app/ebin
     # or: ./start.sh
