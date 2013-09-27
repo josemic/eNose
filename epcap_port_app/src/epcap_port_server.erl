@@ -103,7 +103,7 @@ rule_element_unregister(WorkerPid, ChildWorkerPid, RuleOptionList)->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    io:format("Ecap2_server started\n"),
+    io:format("Epcap_port_server started\n"),
     {ok, #state{instance = 0, package_worker_list = []}}.
 
 
@@ -171,30 +171,30 @@ handle_call({unregister_interface, WorkerPid, ChildWorkerPid}, _From, State) ->
 	    StateNew = State#state{package_worker_list = NewPackage_worker_list}
     end,
     {reply, Reply, StateNew};
-handle_call({register_rule, OptionTupleList, Rule_worker_module, RuleWorkerOptionList}, _From, State) ->
-    case lists:keyfind(1,?SERVER, OptionTupleList) of
-	{?SERVER, InterfaceOptions} -> 
-	    case get_package_worker_pid_by_interface_options(State#state.package_worker_list, InterfaceOptions) of
-		{not_found, InterfaceOptionsSorted} ->
-		    {ok, EPCAP_WorkerPid} = epcap_port_root_sup:start_worker(State#state.instance, InterfaceOptionsSorted),
-		    StateNew = State#state{instance = State#state.instance +1, package_worker_list = insert_element(State#state.package_worker_list, {InterfaceOptions, EPCAP_WorkerPid})},
-		    {ok, Rule_WorkerPid} = epcap_port_worker:start_rule_worker(EPCAP_WorkerPid, Rule_worker_module, RuleWorkerOptionList),
-		    Reply = {registering_rule, Rule_WorkerPid, InterfaceOptionsSorted, RuleWorkerOptionList};
-		{found, EPCAP_WorkerPid, InterfaceOptionsSorted} ->
-		    StateNew = State,
-		    {ok, Rule_WorkerPid} = epcap_port_worker:start_rule_worker(EPCAP_WorkerPid, Rule_worker_module, RuleWorkerOptionList),
-		    Reply = {registering_rule, Rule_WorkerPid, InterfaceOptionsSorted, RuleWorkerOptionList}	
-	    end;	
-	false ->
-	    StateNew = State,
-	    Reply = {server_options_not_found, ?SERVER, OptionTupleList}
-    end,
-    {reply, Reply, StateNew};
+%%handle_call({register_rule, OptionTupleList, Rule_worker_module, RuleWorkerOptionList}, _From, State) ->
+%%    case lists:keyfind(1,?SERVER, OptionTupleList) of
+%%	{?SERVER, InterfaceOptions} -> 
+%%	    case get_package_worker_pid_by_interface_options(State#state.package_worker_list, InterfaceOptions) of
+%%		{not_found, InterfaceOptionsSorted} ->
+%%		    {ok, EPCAP_WorkerPid} = epcap_port_root_sup:start_worker(State#state.instance, InterfaceOptionsSorted),
+%%		    StateNew = State#state{instance = State#state.instance +1, package_worker_list = insert_element(State#state.package_worker_list, {InterfaceOptions, EPCAP_WorkerPid})},
+%%		    {ok, Rule_WorkerPid} = epcap_port_worker:start_rule_worker(EPCAP_WorkerPid, Rule_worker_module, RuleWorkerOptionList),
+%%		    Reply = {registering_rule, Rule_WorkerPid, InterfaceOptionsSorted, RuleWorkerOptionList};
+%%		{found, EPCAP_WorkerPid, InterfaceOptionsSorted} ->
+%%		    StateNew = State,
+%%		    {ok, Rule_WorkerPid} = epcap_port_worker:start_rule_worker(EPCAP_WorkerPid, Rule_worker_module, RuleWorkerOptionList),
+%%		    Reply = {registering_rule, Rule_WorkerPid, InterfaceOptionsSorted, RuleWorkerOptionList}	
+%%	    end;	
+%%	false ->
+%%	    StateNew = State,
+%%	    Reply = {server_options_not_found, ?SERVER, OptionTupleList}
+%%    end,
+%%    {reply, Reply, StateNew};
 
-handle_call({unregister_rule_by_ID, {ModulePID, ModuleRuleID}}, _From, State) ->
-    Reply = epcap_worker:stop_rule_worker(ModulePID, ModuleRuleID),
-    StateNew = State,
-    {reply, Reply, StateNew};
+%%handle_call({unregister_rule_by_ID, {ModulePID, ModuleRuleID}}, _From, State) ->
+%%    Reply = epcap_worker:stop_rule_worker(ModulePID, ModuleRuleID),
+%%    StateNew = State,
+%%    {reply, Reply, StateNew};
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
