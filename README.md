@@ -46,13 +46,13 @@ eNose
     observer:start(). % go to tab "Application", optional
     % if you use an older Erlang release try appmon:start().
 
-    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}]}, {message, "Found:*www.heise.de*Meldung*"}]).
+     {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}, {message, "Found: www.heise.de*Meldung*"}]}]).
 
     or
 
     AlwaysMatchFun = fun(Payload) -> no_fail end. % matches every packet received
 
-    {ok, Result2} = rule:start([{epcap_port,[{filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, AlwaysMatchFun}]}, {message, "Received an icmp or tcp (on port 80) package"}]). 
+    {ok, Result2} = rule:start([{epcap_port,[{interface, "eth0"}]}, {content, [{matchfun, AlwaysMatchFun}, {message, "Found an icmp message or (TCP message on port 80)"}]}]).
 
     % Feel free to use other matchfuns
 
@@ -60,7 +60,7 @@ eNose
 
     NeverMatchFun = fun(Payload) -> fail end. % this does not make much sense, except it's an example
 
-    {ok, Result3} = rule:start([{epcap_port,[{filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, NeverMatchFun}]}, {message, "This should never ocurr!!!"}]).
+    {ok, Result3} = rule:start([{epcap_port,[{filter, "icmp or (tcp and port 80)"}]}, {content, [{matchfun, NeverMatchFun}, {message, "This should never ocurr!!!"}]}]).
     
     % Note, as long as the epcap_port parameter do not change the same instance of the epcap_port_worker is used (see observer -> Applications)
     % Now stop this (works in any order):
