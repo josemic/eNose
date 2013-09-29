@@ -33,7 +33,7 @@
 -export([start/1, stop/1]).
 
 start(RuleOptionList) -> 
-						% starts in the reverse order (epcap_server at last: Note epcap_server should always be the first tuple in RuleOptionList.)
+%% starts in the reverse order (epcap_server at last: Note epcap_server should always be the first tuple in RuleOptionList.)
     start(lists:reverse(RuleOptionList), [], undefined). % for epcap_server the ParentPid is undefined
 
 start([], RolebackAccu, _ChildPid) ->
@@ -43,7 +43,7 @@ start([RuleElement|RuleElements], RolebackAccu, ChildWorkerPid)->
     {RuleName, RuleOptionList} = RuleElement,
     RuleServer = list_to_atom(atom_to_list(RuleName) ++ "_server"),
     case (RuleServer:rule_element_register(RuleOptionList, ChildWorkerPid, RuleElements)) of 
-	%% RuleElements is in some cases helpful to decide, whether a new worker needs to bes started or an existing worker can be used.
+	%% RuleElements is in some cases helpful to decide, whether a new worker needs to be started or an existing worker can be used.
 	{ok, WorkerPid} -> 
 	    io:format("Started rule server: ~p  with Pid: ~p~n", [RuleServer, WorkerPid]),
 	    start(RuleElements, [{RuleServer, RuleOptionList, WorkerPid, ChildWorkerPid}|RolebackAccu], WorkerPid);
