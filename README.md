@@ -9,7 +9,14 @@ eNose
 ## QUICK SETUP
 
     cd eNose
+    
+
     make all
+
+    # if dependencies are not intalled automatically run the following and repeat the step above 
+    # (please report back if it does not work without):
+    ./rebar get-deps    
+
         
     # Allow your user to epcap with root privs
     sudo visudo
