@@ -67,9 +67,9 @@ start_worker(Instance, Options) ->
     {ok, Result}.
 
 stop_worker(WorkerPid, ChildWorkerPid) ->
-						%Result = supervisor:terminate_child(?SERVER, WorkerPid), 
-						%io:format("Supervisor stopping Pid ~p with result~p~n", [WorkerPid, Result]), 
-						%Result.
+%%Result = supervisor:terminate_child(?SERVER, WorkerPid), 
+%%io:format("Supervisor stopping Pid ~p with result~p~n", [WorkerPid, Result]), 
+%%Result.
     Res = epcap_port_worker:unregister_child_worker_Pid(WorkerPid,ChildWorkerPid),
     case Res of
 	no_children_left ->
@@ -77,7 +77,7 @@ stop_worker(WorkerPid, ChildWorkerPid) ->
 	children_left ->
 	    children_left % do nothing
     end.
-						%gen_server:call(WorkerPid, stop_worker).
+%%gen_server:call(WorkerPid, stop_worker).
 
 %%%===================================================================
 %%% Supervisor callbacks
