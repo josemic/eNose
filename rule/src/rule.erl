@@ -49,13 +49,13 @@ start([RuleElement|RuleElements], RolebackAccu, ChildWorkerPid)->
 	    start(RuleElements, [{RuleServer, RuleOptionList, WorkerPid, ChildWorkerPid}|RolebackAccu], WorkerPid);
 	{fail, FailReason} ->
 	    io:format("Failed to start rule server: ~p with reason: ~p~n", [RuleServer, FailReason]),
-						% stops in the reverse order (e.g. if started epcap_server, epcap_server at first)
+	    %% stops in the reverse order (e.g. if started epcap_server, epcap_server at first)
 	    ok = roleback(lists:reverse(RolebackAccu)), 
             failed
     end.			 
 
 stop(RolebackAccu) ->
-						% stops in the reverse order (epcap_server at first)
+    %% stops in the reverse order (epcap_server at first)
     roleback(lists:reverse(RolebackAccu)).
 
 roleback([]) ->
