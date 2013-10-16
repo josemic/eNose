@@ -20,7 +20,7 @@ s()->
     %%dbg:tpl(content_server, x),
     %%dbg:tpl(epcap_root_sup, x),
     %%dbg:tpl(content_root_sup, x),	
-    %%dbg:tpl(echo_server, x),
+    %%dbg:tpl(defrag_server, x),
     dbg:tpl(defrag_worker, x),
     %%dbg:tpl(supervisor, x),
     dbg:p(new, m),
