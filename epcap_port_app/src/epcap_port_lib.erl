@@ -51,11 +51,12 @@ iso_8601_fmt(DateTime) ->
     lists:flatten(io_lib:format("~4.10.0B-~2.10.0B-~2.10.0B ~2.10.0B:~2.10.0B:~2.10.0B",
 				[Year, Month, Day, Hour, Min, Sec])).
 
-header(#tcp{ackno = Ackno, seqno = Seqno, win = Win} = Hdr) ->
+header(#tcp{ackno = Ackno, seqno = Seqno, win = Win, opt = Opt} = Hdr) ->
     [{flags, tcp_flags(Hdr)},
      {seq, Seqno},
      {ack, Ackno},
-     {win, Win}];
+     {win, Win},
+     {opt, Opt}];
 header(#udp{ulen = Ulen}) ->
     [{ulen, Ulen}];
 header(#icmp{code = Code, type = Type}) ->

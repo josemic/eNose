@@ -89,7 +89,7 @@ unregister_child_worker_Pid(ChildWorkerPid) ->
 %%    gen_server:call(?MODULE, {unregister_connection_worker_Pid,  ConnectionWorkerPid}).
 
 remove_connection_worker_by_pid(Pid) ->
-    gen_server:call(?MODULE, {remove_connection_worker_by_pid,  Pid}).
+    gen_server:call(?MODULE, {remove_connection_worker_by_pid,  Pid}, infinity).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -229,16 +229,21 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {seq, Seqno} = lists:keyfind(seq, 1, Header),
             {ack, Ackno} = lists:keyfind(ack, 1, Header),
             {win, Win} = lists:keyfind(win, 1, Header),
-            [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-            PayloadLength = byte_size(Payload),
-	    case {Ack, Syn, Fin, Rst, Seqno, Ackno, Win} of
-		{false, true, false, false, _, _, _} -> % Syn
+            {opt, Opt} = lists:keyfind(opt, 1, Header),
+            %%[Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
+            %%PayloadSize = byte_size(Payload),
+            [_EtherIgnore, IP, Hdr, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
+            #ipv4{len = Len1, hl = HL} = IP,
+            #tcp{off = Off} = Hdr,
+            PayloadSize = Len1 - (HL * 4) - (Off * 4),
+	    case {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt} of
+		{false, true, false, false, _, _, _, _} -> % Syn
                     StateNew1 = State#state{connection_worker_instance = State#state.connection_worker_instance + 1}, 	
 		    {ok, ConnectionWorkerPid} = defrag_root_sup:start_worker(
 						  StateNew1#state.connection_worker_instance, 
-						  {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win}, 
+						  {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
 						   {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
-						   DLT, Time, Len, Packet, PayloadLength=0}, 
+						   DLT, Time, Len, Packet, PayloadSize=0}, 
 						  StateNew1#state.child_worker_pid_list), 
 		    AddressTuple = {{Source_address, Source_port}, {Destination_address, Destination_port}},
 		    StateNew = StateNew1#state{connection_worker_pid_list = 
@@ -258,16 +263,19 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {seq, Seqno} = lists:keyfind(seq, 1, Header),
             {ack, Ackno} = lists:keyfind(ack, 1, Header),
             {win, Win} = lists:keyfind(win, 1, Header),
-            [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-            PayloadLength = byte_size(Payload),
+            {opt, Opt} = lists:keyfind(opt, 1, Header),
+            %%[Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
+            %%PayloadLength = byte_size(Payload),
+            [_EtherIgnore, #ipv4{len = Len1, hl = HL}, #tcp{off = Off}, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
+            PayloadSize = Len1 - (HL * 4) - (Off * 4),
 	    %% io:format("WorkerPid: ~p, packet ~p~n", [WorkerPid, 
-	    %%			      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win}, 
+	    %%			      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
             %%		       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
 	    %%		       DLT, Time, Len, Packet, PayloadLength}]),
 	    defrag_worker:send_packet(WorkerPid, 
-				      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win}, 
+				      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
 				       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
-				       DLT, Time, Len, Packet, PayloadLength}),
+				       DLT, Time, Len, Packet, PayloadSize}),
 	    StateNew = State
     end,
     {noreply, StateNew};

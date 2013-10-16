@@ -52,7 +52,7 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-start_worker(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win}, 
+start_worker(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
 			{{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
 			DLT, Time, Len, Packet, PayloadLength}, ChildWorkerList) ->
     Instance_s = integer_to_list(Instance),
@@ -62,7 +62,7 @@ start_worker(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackn
     Name_s = ?MODULE_STRING ++ "_" ++ Instance_s ++ "_" ++ Ref_s,  
     Name = list_to_atom (Name_s),
     %% the name must be a unique atom
-    Defrag_worker = {Name, {defrag_worker, start_link, [Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win}, 
+    Defrag_worker = {Name, {defrag_worker, start_link, [Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
 								   {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
 								   DLT, Time, Len, Packet, PayloadLength},ChildWorkerList]},
 		     temporary, 2000, worker, [defrag_worker]},
