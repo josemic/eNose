@@ -230,12 +230,18 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {ack, Ackno} = lists:keyfind(ack, 1, Header),
             {win, Win} = lists:keyfind(win, 1, Header),
             {opt, Opt} = lists:keyfind(opt, 1, Header),
-            %%[Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-            %%PayloadSize = byte_size(Payload),
-            [_EtherIgnore, IP, Hdr, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
-            #ipv4{len = Len1, hl = HL} = IP,
-            #tcp{off = Off} = Hdr,
-            PayloadSize = Len1 - (HL * 4) - (Off * 4),
+            %%[_EtherIgnore, IP, Hdr, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
+	    %%case IP of
+	    %%	#ipv4{len = Len1, hl = HL} = IP ->
+            %%		#tcp{off = Off} = Hdr,
+            %%		PayloadSize = Len1 - (HL * 4) - (Off * 4);
+            %%
+	    %%	#ipv6{} ->
+	    %%		PayloadSize = byte_size(Payload)
+	    %%end,
+            [_EtherIgnore, IP, TCP, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}), 
+            PayloadSize = payloadsize(IP, TCP),
+            <<Payload:PayloadSize/binary>>,
 	    case {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt} of
 		{false, true, false, false, _, _, _, _} -> % Syn
                     StateNew1 = State#state{connection_worker_instance = State#state.connection_worker_instance + 1}, 	
@@ -266,8 +272,18 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {opt, Opt} = lists:keyfind(opt, 1, Header),
             %%[Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
             %%PayloadLength = byte_size(Payload),
-            [_EtherIgnore, #ipv4{len = Len1, hl = HL}, #tcp{off = Off}, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
-            PayloadSize = Len1 - (HL * 4) - (Off * 4),
+            %%[_EtherIgnore, IP, Hdr, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
+	    %%case IP of
+	    %%	#ipv4{len = Len1, hl = HL} = IP ->
+            %% 		#tcp{off = Off} = Hdr,
+            %% 		PayloadSize = Len1 - (HL * 4) - (Off * 4);
+            %%
+	    %%	#ipv6{} ->
+	    %%		PayloadSize = byte_size(Payload)
+	    %%end,
+            [_EtherIgnore, IP, TCP, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}), 
+            PayloadSize = payloadsize(IP, TCP),
+            <<Payload:PayloadSize/binary>>,
 	    %% io:format("WorkerPid: ~p, packet ~p~n", [WorkerPid, 
 	    %%			      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
             %%		       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
@@ -352,5 +368,17 @@ get_connection_worker_pid_by_address_tuple(
  )->
     get_connection_worker_pid_by_address_tuple(AddressTupleElements, AddressTuple).
 
+payloadsize(#ipv4{len = Len, hl = HL}, #tcp{off = Off}) ->
+    Len - (HL * 4) - (Off * 4);
 
+% jumbo packet
+payloadsize(#ipv6{len = 0, next = Next}, #tcp{off = Off}) ->
+    % XXX handle jumbo packet here
+    0;
+payloadsize(#ipv6{len = Len, next = ?IPPROTO_TCP}, #tcp{off = Off}) ->
+    Len - (Off * 4);
+% additional extension headeres
+payloadsize(#ipv6{len = Len, next = Next}, #tcp{off = Off}) ->
+    % XXX handle extension headers here
+    0.
 
