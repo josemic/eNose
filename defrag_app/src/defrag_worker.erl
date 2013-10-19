@@ -124,7 +124,7 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
-            	      AddressTuple, DLT, Time, Len, Packet, _PayloadLength=0}, ChildWorkerList)->
+            	      AddressTuple, DLT, Time, Len, Packet, PayloadLength=0}, ChildWorkerList)->
     {{Initiator_address, Initiator_port},{Responder_address, Responder_port}} = AddressTuple, 
     Instance_s = integer_to_list(Instance),
     Ref_s = erlang:ref_to_list(make_ref()),
@@ -137,7 +137,7 @@ start_link(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, SEG_SEQ, SEG_
     error_logger:info_report("gen_server:start_link(~p)~n",[[{local, Name},?MODULE,[],[],self()]]),
     Dbg_fun = fun(FuncState, Event, ProcState) -> io:format("~nDebugFun:~n-FuncState:~p~n-Event:~p~n-ProcState:~p~n", [FuncState, Event, ProcState]) end,
     gen_fsm:start_link({local,Name},?MODULE,[Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
-							AddressTuple, DLT, Time, Len, Packet, _PayloadLength=0}, ChildWorkerList],[?GEN_FSM_OPTS]).
+							AddressTuple, DLT, Time, Len, Packet, PayloadLength=0}, ChildWorkerList],[?GEN_FSM_OPTS]).
 
 stop(WorkerPid) ->
     gen_server:call(WorkerPid, stop_worker).
@@ -167,9 +167,9 @@ send_packet(WorkerPid, Message) ->
 %% @end
 %%--------------------------------------------------------------------
 
-init([Instance,{packet_with_addressing, {false, true, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
+init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
 		AddressTuple, 
-		DLT, Time, Len, Packet, _PayloadLength=0}, ChildWorkerList]) ->
+		DLT, Time, Len, Packet, PayloadLength=0}, ChildWorkerList]) ->
     {{Initiator_address, Initiator_port},{Responder_address, Responder_port}} = AddressTuple,
     State = #state{
 	       instance = Instance, 
@@ -189,13 +189,13 @@ init([Instance,{packet_with_addressing, {false, true, false, false, SEG_SEQ, SEG
                responder_payload_store = []
 	      },
     Direction = initiator,
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ+1),
-    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, false),
-    StateNew3  = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
+    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,SEG_SEQ, Syn or Fin),
+    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+    StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
     case lists:keyfind(window_scale, 1, OPT) of 
 	{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
-               StateNew  = storeState_SND_WND_SCALE(Direction, StateNew3, ShiftCount);            
+               StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
            false ->
                StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
     end,
@@ -220,27 +220,27 @@ init([Instance,{packet_with_addressing, {false, true, false, false, SEG_SEQ, SEG
 %%{packet_with_addressing, 
 %%		{Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
 %%		{{Source_address, Source_port},{Destination_address, Destination_port}}, 
-%%		DLT, Time, Len, Packet, _PayloadLength=0}),
+%%		DLT, Time, Len, Packet, PayloadLength=0}),
 state_listen( % this state ocurrs only after reset
   {packet_with_addressing, 
-   {false, true, false, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn after Rst
+   {Ack = false, Syn = true, Fin = false, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn after Rst
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     %% Rst should be ignored // RFC 793, p65
     Direction = initiator,
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    case test_sequence_no_in_window(Direction, State, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , State, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, false),
-	    StateNew3  = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
-		{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction, StateNew3, ShiftCount);            
+		{window_scale, [{shift_count, ShiftCount}, {multiplier, _Multiplier}]} ->
+                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
             end,
@@ -253,41 +253,38 @@ state_listen( % this state ocurrs only after reset
 
 state_listen(
   {packet_with_addressing,
-   {true, _, _, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack= true, Syn, Fin, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   DLT, Time, Len, Packet, PayloadLength=0}, State) ->
+    Direction = any,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     %% ignore all Ack packages // RCF 793 p. 65
     {next_state, state_listen, StateNew};
 
-state_listen(
-  {packet_with_addressing,
-   {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    {next_state, state_listen, StateNew}.
-
+state_listen(timeout, State) ->
+    io:format("Closing Instance: ~p~n in state listen", [State#state.instance]),    
+    {stop, shutdown, State}.
 
 state_syn_sent(
   {packet_with_addressing, 
-   {false, true, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn (when Ack received before)
+   {Ack = false, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn (when Ack received before)
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when
       State#state.syn_ack_received == true, % !!!!!!!! Ack received before
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, false),
-	    StateNew3  = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
 		{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction, StateNew3, ShiftCount);            
+                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % responder_RCV_WND_SCALE remains undefined
             end,
@@ -300,21 +297,21 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing, 
-   {true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
             StateNew1 = StateNew0#state{syn_ack_received = true},     % set flag for received Ack
-	    StateNew2 = storeState_RCV_NXT(Direction, StateNew1, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew3 = storeState_SND_UNA(Direction, StateNew2, SEG_ACK, true),
-	    StateNew  = storeState_SND_WND(Direction, StateNew3, SEG_WND),
+	    StateNew2 = storeState_RCV_NXT(Direction , StateNew1, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew3 = storeState_SND_UNA(Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew3, SEG_WND),
 	    NextStateName = state_syn_sent;
 	false ->
 	    StateNew = State,
@@ -324,23 +321,23 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing, 
-   {false, true, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn retransmission
+   {Ack = false, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn retransmission
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, false),
-	    StateNew3 = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
 		{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction, StateNew3, ShiftCount);            
+                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
             end,
@@ -353,23 +350,23 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing, 
-   {Ack = true, true, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn-Ack
+   {Ack = true, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn-Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew3 = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
 		{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction, StateNew3, ShiftCount);            
+                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % responder_RCV_WND_SCALE remains undefined
             end,
@@ -382,22 +379,22 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing,
-   {Ack, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
 	    NextStateName = state_fin_wait_1;
         false ->
             StateNew = State,
@@ -407,22 +404,22 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing,
-   {Ack = false, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
+   {Ack = false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
 	    NextStateName = state_fin_wait_1;
         false ->
             StateNew = State,
@@ -432,28 +429,29 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+    Direction = any, 
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_listen, StateNew, 10000}.
 
 state_syn_syn_ack_sent(
   {packet_with_addressing, 
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ), % as pure ACK received, sequence number is not increased
-            StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,     SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+            StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             NextStateName = state_established;
         false ->
             StateNew = State,
@@ -463,20 +461,20 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing, 
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,     SEG_SEQ, Syn or Fin),% as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             NextStateName = state_established;
         false ->
             StateNew = State,
@@ -486,22 +484,22 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing,
-   {Ack, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
 	    NextStateName = state_fin_wait_1;
         false ->
             StateNew = State,
@@ -511,22 +509,22 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing,
-   {Ack, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
 	    NextStateName = state_fin_wait_1;
         false ->
             StateNew = State,
@@ -537,28 +535,29 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+    Direction = any,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_listen, StateNew, 10000}.
 
 state_syn_received(
   {packet_with_addressing, 
-   {true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, true),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,     SEG_SEQ, Syn or Fin),% as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
 	    NextStateName = state_established;
         false ->
             StateNew = State,
@@ -568,22 +567,22 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {Ack, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
 	    NextStateName = state_fin_wait_1;
         false ->
             StateNew = State,
@@ -593,22 +592,22 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {Ack, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
 	    NextStateName = state_fin_wait_1;
         false ->
             StateNew = State,
@@ -618,59 +617,62 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {_, _, _, true, _SEG_SEQ, _SEG_ACK, _SEG_WND, OPT}, % Rst
+   {Ack ,Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+   Direction = any,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_listen, StateNew, 10000}.
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % No payload
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % No payload
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
    DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
     Direction = initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, PayloadLength),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, PayloadLength, Ack),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
         false ->
+            io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State % SEG_ACK should be 0 // RFC 793, p. 65
     end,
     {next_state, state_established, StateNew};
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % No payload
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % No payload
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
    DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, PayloadLength),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, PayloadLength, Ack),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
 	false ->
+            io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State % SEG_ACK should be 0 // RFC 793, p. 65
     end,
     {next_state, state_established, StateNew};
 
 state_established(
   {packet_with_addressing,
-   {Ack, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % payload, Note: if Ack == false, SEG_ACK should be 0
+   {Ack, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % payload, Note: if Ack == false, SEG_ACK should be 0
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
@@ -678,22 +680,23 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ, PayloadLength) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, PayloadLength),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, PayloadLength, Ack),
-	    StateNew3 = storeState_SND_WND(Direction, StateNew2, SEG_WND),
-      	    StateNew  = storeState_Payload(Direction, StateNew3, SEG_SEQ, PayloadLength, Payload);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
+	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
+      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, Payload);
         false ->
+            io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State
     end,
     {next_state, state_established, StateNew};
 
 state_established(
   {packet_with_addressing,
-   {Ack, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % payload, Note: if Ack == false, SEG_ACK should be 0
+   {Ack, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % payload, Note: if Ack == false, SEG_ACK should be 0
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
@@ -701,35 +704,36 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     [_Ether, _IP, _Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
+    StateNew0 =State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ, PayloadLength) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, PayloadLength),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, PayloadLength, Ack),
-	    StateNew3 = storeState_SND_WND(Direction, StateNew2, SEG_WND),
-      	    StateNew  = storeState_Payload(Direction, StateNew3, SEG_SEQ, PayloadLength, Payload);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
+	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
+      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, Payload);
 	false ->
+            io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State 
     end,
     {next_state, state_established, StateNew};
 
 state_established(
   {packet_with_addressing,
-   {true, true, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % Syn-Ack retransmission
+   {Ack = true, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % Syn-Ack retransmission
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, true),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
         false ->
             StateNew = State
     end,
@@ -737,20 +741,20 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {true, true, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn-Ack retransmission
+   {Ack = true, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn-Ack retransmission
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, true),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
         false ->
             StateNew = State
     end,
@@ -758,20 +762,20 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack without payload, Note: SEG_SEQ should be 0
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack without payload, Note: SEG_SEQ should be 0
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,     SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
         false ->
             StateNew = State
     end,
@@ -779,20 +783,20 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack without payload, Note: SEG_SEQ should be 0
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack without payload, Note: SEG_SEQ should be 0
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Direction, StateNew2, SEG_WND);
+	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0,     SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
         false ->
             StateNew = State
     end,
@@ -800,36 +804,36 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    [_Ether, _IP, _Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
     Direction = initiator,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    [_Ether, _IP, _Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ, PayloadLength) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew4 = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew4 = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
       	    StateNew  = storeState_Payload(initiator, StateNew4, SEG_SEQ, PayloadLength, Payload),
 	    NextStateName = state_fin_wait_1;
         false ->
+            io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = State,
             NextStateName = state_established,
-            io:format("Warning!!!!"),
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
     end,
     {next_state, NextStateName, StateNew};
 
 state_established(
   {packet_with_addressing,
-   {Ack, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack 
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack 
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
@@ -837,72 +841,72 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     [_Ether, _IP, _Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Direction = responder,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
+    case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ, PayloadLength) of
 	true -> 
-            StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0), 
-    	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ+1),
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew4 = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+            StateNew1 = copy_state_to_close_initiator_close_responder(Direction , StateNew0), 
+    	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew4 = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
       	    StateNew  = storeState_Payload(responder, StateNew4, SEG_SEQ, PayloadLength, Payload),
 	    NextStateName = state_fin_wait_1;
         false ->
+            io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = State,
             NextStateName = state_established,
-            io:format("Warning!!!!"),
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
     end,
     {next_state, NextStateName, StateNew};
 
 state_established(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{Close_initiator_address, Close_initiator_port},
    {Close_responder_address, Close_responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Close_responder_address, 
       State#state.responder_port    == Close_responder_port,
       State#state.initiator_address == Close_initiator_address,
       State#state.initiator_port    == Close_initiator_port ->
-      StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
       Direction = initiator,
-      StateNew = copy_state_to_close_initiator_close_responder(Direction, StateNew0),
+      StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+      StateNew = copy_state_to_close_initiator_close_responder(Direction , StateNew0),
     {next_state, state_time_wait, StateNew, 10000};
 
 state_established(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}},
-   DLT, Time, Len, Packet, _PayloadLength}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Close_responder_address, 
       State#state.responder_port    == Close_responder_port,
       State#state.initiator_address == Close_initiator_address,
       State#state.initiator_port    == Close_initiator_port ->
-      StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
       Direction = responder,
-      StateNew = copy_state_to_close_initiator_close_responder(Direction, StateNew0),
+      StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+      StateNew = copy_state_to_close_initiator_close_responder(Direction , StateNew0),
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack = true, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack
+   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_fin_finack_wait,
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
         false ->
@@ -914,21 +918,21 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack= true, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
+   {Ack= true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
    {{Close_initiator_address, Close_initiator_port}, 
     {Close_responder_address, Close_responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_fin_wait_1, 
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
 	false ->
@@ -940,7 +944,7 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack 
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack 
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
@@ -949,16 +953,16 @@ state_fin_wait_1(
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
     [_Ether, _IP, _Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
 	    StateNew1 = StateNew0#state{fin_ack_received = true}, % Ack for Fin received 
-	    StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew3 = storeState_SND_UNA(Close_Direction, StateNew2, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew3, SEG_WND),
+	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
      	    %% not possible because close responder payload store does not exist:
-            %%StateNew  = storeState_Payload(Close_Direction, StateNew4, SEG_SEQ, PayloadLength, Payload),
+            %%StateNew  = storeState_Payload(Close_Direction , StateNew4, SEG_SEQ, PayloadLength, Payload),
 	    NextStateName = state_fin_wait_2,
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
 	false ->
@@ -970,7 +974,7 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % unexpected Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % unexpected Ack
    {{Close_initiator_address, Close_initiator_port},
     {Close_responder_address, Close_responder_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
@@ -979,15 +983,15 @@ state_fin_wait_1(
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
     [_Ether, _IP, _Hdr, _Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ, PayloadLength) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ, PayloadLength) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
      	    %% not possible because close responder payload store does not exist:
-            %%StateNew  = storeState_Payload(Close_Direction, StateNew4, SEG_SEQ, PayloadLength, Payload),
+            %%StateNew  = storeState_Payload(Close_Direction , StateNew4, SEG_SEQ, PayloadLength, Payload),
 	    NextStateName = state_fin_wait_1,
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
 	false ->
@@ -999,22 +1003,22 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack=false, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
+   {Ack=false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}},
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.fin_ack_received == true, % when Ack for Fin has been received before
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_fin_fin_wait,
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
 	false ->
@@ -1026,21 +1030,21 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack=false, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
+   {Ack=false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}},
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_closing,
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
 	false ->
@@ -1052,7 +1056,7 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack, _, _Fin = true, _, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, %% Payload, not expected here as Fin-bit is set
+   {Ack, Syn , Fin = true, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, %% Payload, not expected here as Fin-bit is set
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
@@ -1061,13 +1065,14 @@ state_fin_wait_1(
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port  ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+    Close_Direction = close_responder,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     io:format("Bad request Fin:true, Ack:~p with Payload~n", [Ack]),
     {next_state, state_time_wait, StateNew, 10000};
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {_, _, _, _Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, %% Payload, not expected here as closed by peer side 
+   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, %% Payload, not expected here as closed by peer side 
    %%(race condition)!!! - ignore it
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}}, 
@@ -1077,39 +1082,42 @@ state_fin_wait_1(
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port  ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+    Close_Direction = close_responder,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     io:format("Bad request Reset with payload~n"),
     {next_state, state_time_wait, StateNew, 10000};
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{Close_initiator_address, Close_initiator_port},
    {Close_responder_address, Close_responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Close_responder_address, 
       State#state.responder_port    == Close_responder_port,
       State#state.initiator_address == Close_initiator_address,
       State#state.initiator_port    == Close_initiator_port ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+    Close_Direction = close_initiator,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000};
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack , Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}},
-   DLT, Time, Len, Packet, _PayloadLength}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Close_responder_address, 
       State#state.responder_port    == Close_responder_port,
       State#state.initiator_address == Close_initiator_address,
       State#state.initiator_port    == Close_initiator_port ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+    Close_Direction = close_responder,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
    {{Close_responder_address, Close_responder_port},
     {Close_initiator_address, Close_initiator_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
@@ -1117,13 +1125,13 @@ state_fin_wait_2(
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0    , SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND), 
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0    , SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND), 
 	    NextStateName = state_fin_wait_2;
         false ->
             StateNew = State,
@@ -1133,7 +1141,7 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = true, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
+   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
    {{Close_initiator_address, Close_initiator_port},
     {Close_responder_address, Close_responder_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
@@ -1141,13 +1149,13 @@ state_fin_wait_2(
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_fin_wait_2;
         false ->
             StateNew = State,
@@ -1157,21 +1165,21 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = false, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
+   {Ack = false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
    {{Close_responder_address, Close_responder_port},
     {Close_initiator_address, Close_initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
             NextStateName = state_fin_ack_fin_wait; 
 	false ->
 	    StateNew = State,
@@ -1181,21 +1189,21 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = true, false, _Fin = true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack
+   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack
    {{Close_responder_address, Close_responder_port},
     {Close_initiator_address, Close_initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
             NextStateName = state_fin_ack_fin_wait; 
 	false ->
 	    StateNew = State,
@@ -1205,29 +1213,30 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {_, _, _, true, _SEG_SEQ, _SEG_ACK, _SEG_WND, OPT}, % Rst
+   { Ack, Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+    Direction = any,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_fin_wait(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port},
     {Close_responder_address, Close_responder_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_closing; 
 	false ->
 	    StateNew = State,
@@ -1237,29 +1246,30 @@ state_fin_fin_wait(
 
 state_fin_fin_wait(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack , Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+    Direction = any,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_finack_wait(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port},
     {Close_responder_address, Close_responder_port}},
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
             {next_state, state_time_wait, StateNew, 10000};
         false ->
             StateNew = State,
@@ -1268,29 +1278,30 @@ state_fin_finack_wait(
 
 state_fin_finack_wait(
   {packet_with_addressing,
-   {_, _, _, true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {Ack , Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+   Direction = any,
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_ack_fin_wait(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port},
     {Close_responder_address, Close_responder_port}},
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
             {next_state, state_time_wait, StateNew, 1000};
         false ->
             StateNew = State,
@@ -1299,29 +1310,54 @@ state_fin_ack_fin_wait(
 
 state_fin_ack_fin_wait(
   {packet_with_addressing,
-   {_, _, _, true, _SEG_SEQ, _SEG_ACK, _SEG_WND, OPT}, % Rst
-   {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    {next_state, state_time_wait, StateNew, 10000}.
-
-state_closing(
-  {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
-   {{Close_initiator_address, Close_initiator_port},
-    {Close_responder_address, Close_responder_port}},
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {{Close_responder_address, Close_responder_port},
+    {Close_initiator_address, Close_initiator_port}},
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    Close_Direction = close_responder,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
+            {next_state, fin_ack_fin_wait, StateNew};
+        false ->
+            StateNew = State,
+            {next_state, fin_ack_fin_wait, StateNew}
+    end;
+
+
+state_fin_ack_fin_wait(
+  {packet_with_addressing,
+   {Ack ,Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {{_, _},{_,_}}, 
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+   Direction = any, 
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    {next_state, state_time_wait, StateNew, 10000}.
+
+state_closing(
+  {packet_with_addressing,
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {{Close_initiator_address, Close_initiator_port},
+    {Close_responder_address, Close_responder_port}},
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+      State#state.close_responder_address == Close_responder_address, 
+      State#state.close_responder_port    == Close_responder_port,
+      State#state.close_initiator_address == Close_initiator_address,
+      State#state.close_initiator_port    == Close_initiator_port ->
+    Close_Direction = close_initiator,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
+	true -> 
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_closing,
             {next_state, NextStateName, StateNew}; 
 	false ->
@@ -1332,30 +1368,31 @@ state_closing(
 
 state_closing(
   {packet_with_addressing,
-   {_, _, _, true, _SEG_SEQ, _SEG_ACK, _SEG_WND, OPT}, % Rst
-   {{_, _},{_, _}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
-    StateNew = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
+   {Ack , Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {{_, _},{_, _}},
+   Direction = any, 
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
+    StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_time_wait(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
    {{Close_responder_address, Close_responder_port},
     {Close_initiator_address, Close_initiator_port}},
-   DLT, Time, Len, Packet, _PayloadLength}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    %% ignore payload
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    %% ignore payload
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
             NextStateName = state_time_wait;
 	false ->
 	    StateNew = State,
@@ -1365,21 +1402,21 @@ state_time_wait(
 
 state_time_wait(
   {packet_with_addressing,
-   {Ack = true, false, true, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
+   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}}, 
-   DLT, Time, Len, Packet, _PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
     Close_Direction = close_responder,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ+1),
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
 	    NextStateName = state_time_wait; 
 	false ->
 	    StateNew = State,
@@ -1389,22 +1426,47 @@ state_time_wait(
 
 state_time_wait(
   {packet_with_addressing,
-   {Ack = true, false, false, false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, %Ack
+   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, %Ack
    {{Close_initiator_address, Close_initiator_port},
     {Close_responder_address, Close_responder_port}},
-   DLT, Time, Len, Packet, _PayloadLength}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    StateNew0 = State#state{stack_trace_path=[?current_function_name()|State#state.stack_trace_path]},
-    %% ignore payload
     Close_Direction = close_initiator,
-    case test_sequence_no_in_window(Close_Direction, StateNew0, SEG_SEQ) of
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    %% ignore payload
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction, StateNew0, SEG_SEQ), % as pure ACK received, sequence number is not increased
-	    StateNew2 = storeState_SND_UNA(Close_Direction, StateNew1, SEG_ACK, Ack),
-	    StateNew  = storeState_SND_WND(Close_Direction, StateNew2, SEG_WND),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
+            NextStateName = state_time_wait;
+	false ->
+	    StateNew = State,
+	    NextStateName = state_time_wait
+    end,
+    {next_state, NextStateName, StateNew, 10000};
+
+state_time_wait(
+  {packet_with_addressing,
+   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack / Fin
+   {{Close_initiator_address, Close_initiator_port},
+    {Close_responder_address, Close_responder_port}},
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
+      State#state.close_responder_address == Close_responder_address, 
+      State#state.close_responder_port    == Close_responder_port,
+      State#state.close_initiator_address == Close_initiator_address,
+      State#state.close_initiator_port    == Close_initiator_port ->
+    Close_Direction = close_initiator,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    %% ignore payload
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
+	true -> 
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
             NextStateName = state_time_wait;
 	false ->
 	    StateNew = State,
@@ -1416,10 +1478,11 @@ state_time_wait(
   {packet_with_addressing,
    {_, _, _, true, _SEG_SEQ, _SEG_ACK, _SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, _PayloadLength}, State) ->
+   DLT, Time, Len, Packet, PayloadLength}, State) ->
     {next_state, state_time_wait, State, 10000};
 
 state_time_wait(timeout, State) ->
+    io:format("Closing Instance: ~p in state time_wait~n", [State#state.instance]),
     {stop, shutdown, State}.
 
 %%--------------------------------------------------------------------
@@ -1613,27 +1676,71 @@ ack_valid(SEG_ACK, SND_UNA, SND_WND) ->
     end.
 
 
-test_ack_valid(initiator, State, SEG_ACK) ->
+test_ack_valid(Direction = initiator, State, SEG_ACK) ->
     ack_valid(SEG_ACK, State#state.initiator_SND_UNA, 
-             calculate_window(State#state.initiator_RCV_WND, 
-                              State#state.initiator_RCV_WND_SCALE, State#state.responder_RCV_WND_SCALE)); %% 16#FFFF); % used as send Window
+             calculate_window(Direction, State));
 
-test_ack_valid(responder, State, SEG_ACK) ->
+test_ack_valid(Direction = responder, State, SEG_ACK) ->
     ack_valid(SEG_ACK, State#state.responder_SND_UNA, 
-              calculate_window(State#state.responder_RCV_WND,
-              State#state.responder_RCV_WND_SCALE, State#state.initiator_RCV_WND_SCALE)); %16#FFFF); %State#state.responder_RCV_WND);%% used as send Window
+              calculate_window(Direction, State));
 
-test_ack_valid(close_initiator, State, SEG_ACK) ->
+test_ack_valid(Direction = close_initiator, State, SEG_ACK) ->
     ack_valid(SEG_ACK, State#state.close_initiator_SND_UNA, 
-              calculate_window(State#state.close_initiator_RCV_WND,
-              State#state.close_initiator_RCV_WND_SCALE, State#state.close_responder_RCV_WND_SCALE)); %16#FFFF); %State#state.close_initiator_RCV_WND);%% used as send Window
+              calculate_window(Direction, State));
 
-test_ack_valid(close_responder, State, SEG_ACK) ->
+test_ack_valid(Direction = close_responder, State, SEG_ACK) ->
     ack_valid(SEG_ACK, State#state.close_responder_SND_UNA, 
-              calculate_window(State#state.close_responder_RCV_WND,
-              State#state.close_responder_RCV_WND_SCALE, State#state.close_initiator_RCV_WND_SCALE)). %16#FFFF). %State#state.close_initiator_RCV_WND).%% used as send Window
+              calculate_window(Direction, State)).
 
 %% if any of te side did not set the window scale in the options filed, the scale is not used (See RFC 1323)
+
+
+
+test_sequence_no_in_window(Direction = initiator, State, SEG_SEQ) ->
+    sequence_no_in_window(SEG_SEQ, State#state.initiator_RCV_NXT, 
+                          calculate_window(Direction, State), 0);
+
+test_sequence_no_in_window(Direction = responder, State, SEG_SEQ) ->
+    sequence_no_in_window(SEG_SEQ, State#state.responder_RCV_NXT, 
+                          calculate_window(Direction, State), 0);
+
+test_sequence_no_in_window(Direction = close_initiator, State, SEG_SEQ) ->
+    sequence_no_in_window(SEG_SEQ, State#state.close_initiator_RCV_NXT, 
+                          calculate_window(Direction, State), 0);
+
+test_sequence_no_in_window(Direction = close_responder, State, SEG_SEQ) ->
+    sequence_no_in_window(SEG_SEQ, State#state.close_responder_RCV_NXT, 
+                          calculate_window(Direction, State), 0).
+
+
+test_sequence_no_in_window(Direction = initiator, State, SEG_SEQ, SEG_LEN) ->
+    sequence_no_in_window(SEG_SEQ, State#state.initiator_RCV_NXT, 
+                           calculate_window(Direction, State), SEG_LEN);
+
+test_sequence_no_in_window(Direction = responder, State, SEG_SEQ, SEG_LEN) ->
+    sequence_no_in_window(SEG_SEQ, State#state.responder_RCV_NXT, 
+                           calculate_window(Direction, State), SEG_LEN);
+
+test_sequence_no_in_window(Direction = close_initiator, State, SEG_SEQ, SEG_LEN) ->
+    sequence_no_in_window(SEG_SEQ, State#state.close_initiator_RCV_NXT, 
+                           calculate_window(Direction, State), SEG_LEN);
+
+test_sequence_no_in_window(Direction = close_responder, State, SEG_SEQ, SEG_LEN) ->
+    sequence_no_in_window(SEG_SEQ, State#state.close_responder_RCV_NXT, 
+                          calculate_window(Direction, State), SEG_LEN).
+
+calculate_window(initiator, State) ->
+	calculate_window(State#state.initiator_RCV_WND, State#state.initiator_RCV_WND_SCALE, State#state.responder_RCV_WND_SCALE);
+
+calculate_window(responder, State) ->
+	calculate_window(State#state.responder_RCV_WND, State#state.responder_RCV_WND_SCALE, State#state.initiator_RCV_WND_SCALE);
+
+calculate_window(close_initiator, State) ->
+	calculate_window(State#state.close_initiator_RCV_WND, State#state.close_initiator_RCV_WND_SCALE, State#state.close_responder_RCV_WND_SCALE);
+
+calculate_window(close_responder, State) ->
+	calculate_window(State#state.close_responder_RCV_WND, State#state.close_responder_RCV_WND_SCALE, State#state.close_initiator_RCV_WND_SCALE).
+
 calculate_window(WND, undefined, undefined) ->
          WND;
 
@@ -1649,60 +1756,41 @@ calculate_window(WND, WND_SCALE, _PEER_SIDE_WND_SCALE) when WND_SCALE =< 14->
 calculate_window(WND, _WND_SCALE, _PEER_SIDE_WND_SCALE)->
          WND bsl 14.
 
+storeState_RCV_NXT(Direction = initiator,     State,  SEG_SEQ, true) ->
+    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 1), State#state.initiator_RCV_NXT, calculate_window(Direction, State))}; 
 
-test_sequence_no_in_window(initiator, State, SEG_SEQ) ->
-    sequence_no_in_window(SEG_SEQ, State#state.initiator_RCV_NXT, 
-                          calculate_window(State#state.initiator_RCV_WND, State#state.initiator_RCV_WND_SCALE, State#state.responder_RCV_WND_SCALE), 0);
+storeState_RCV_NXT(Direction = initiator,     State,  SEG_SEQ, false) ->
+    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 0), State#state.initiator_RCV_NXT, calculate_window(Direction, State))}; 
 
-test_sequence_no_in_window(responder, State, SEG_SEQ) ->
-    sequence_no_in_window(SEG_SEQ, State#state.responder_RCV_NXT, 
-                          calculate_window(State#state.responder_RCV_WND, State#state.responder_RCV_WND_SCALE, State#state.initiator_RCV_WND_SCALE), 0);
+storeState_RCV_NXT(Direction = responder,     State,  SEG_SEQ, true) ->
+    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 1), State#state.responder_RCV_NXT, calculate_window(Direction, State))};
 
-test_sequence_no_in_window(close_initiator, State, SEG_SEQ) ->
-    sequence_no_in_window(SEG_SEQ, State#state.close_initiator_RCV_NXT, 
-                          calculate_window(State#state.close_initiator_RCV_WND, State#state.close_initiator_RCV_WND_SCALE, State#state.close_responder_RCV_WND_SCALE), 0);
+storeState_RCV_NXT(Direction = responder,     State,  SEG_SEQ, false) ->
+    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 0), State#state.responder_RCV_NXT, calculate_window(Direction, State))};
 
-test_sequence_no_in_window(close_responder, State, SEG_SEQ) ->
-    sequence_no_in_window(SEG_SEQ, State#state.close_responder_RCV_NXT, 
-                          calculate_window(State#state.close_responder_RCV_WND, State#state.close_responder_RCV_WND_SCALE, State#state.close_initiator_RCV_WND_SCALE), 0).
+storeState_RCV_NXT(Direction = close_initiator,     State,  SEG_SEQ, true) ->
+    State#state{close_initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 1), State#state.close_initiator_RCV_NXT, calculate_window(Direction, State))}; 
 
+storeState_RCV_NXT(Direction = close_initiator,     State,  SEG_SEQ, false) ->
+    State#state{close_initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 0), State#state.close_initiator_RCV_NXT, calculate_window(Direction, State))}; 
 
-test_sequence_no_in_window(initiator, State, SEG_SEQ, SEG_LEN) ->
-    sequence_no_in_window(SEG_SEQ, State#state.initiator_RCV_NXT, 
-                          calculate_window(State#state.initiator_RCV_WND, State#state.initiator_RCV_WND_SCALE, State#state.responder_RCV_WND_SCALE), SEG_LEN);
+storeState_RCV_NXT(Direction = close_responder,     State,  SEG_SEQ, true) ->
+    State#state{close_responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 1), State#state.close_responder_RCV_NXT, calculate_window(Direction, State))};
 
-test_sequence_no_in_window(responder, State, SEG_SEQ, SEG_LEN) ->
-    sequence_no_in_window(SEG_SEQ, State#state.responder_RCV_NXT, 
-                          calculate_window(State#state.responder_RCV_WND, State#state.responder_RCV_WND_SCALE, State#state.initiator_RCV_WND_SCALE), SEG_LEN);
+storeState_RCV_NXT(Direction = close_responder,     State,  SEG_SEQ, false) ->
+    State#state{close_responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 0), State#state.close_responder_RCV_NXT, calculate_window(Direction, State))}.
 
-test_sequence_no_in_window(close_initiator, State, SEG_SEQ, SEG_LEN) ->
-    sequence_no_in_window(SEG_SEQ, State#state.close_initiator_RCV_NXT, 
-                          calculate_window(State#state.close_initiator_RCV_WND, State#state.close_initiator_RCV_WND_SCALE, State#state.close_responder_RCV_WND_SCALE), SEG_LEN);
+storeState_RCV_NXT(Direction = initiator,     State,  SEG_SEQ, SEG_LEN, true) ->
+    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +1), State#state.initiator_RCV_NXT, calculate_window(Direction, State))}; 
 
-test_sequence_no_in_window(close_responder, State, SEG_SEQ, SEG_LEN) ->
-    sequence_no_in_window(SEG_SEQ, State#state.close_responder_RCV_NXT, 
-                          calculate_window(State#state.close_responder_RCV_WND, State#state.close_responder_RCV_WND_SCALE, State#state.close_initiator_RCV_WND_SCALE), SEG_LEN).
+storeState_RCV_NXT(Direction = initiator,     State,  SEG_SEQ, SEG_LEN, false) ->
+    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN + 0), State#state.initiator_RCV_NXT, calculate_window(Direction, State))}; 
 
+storeState_RCV_NXT(Direction = responder,     State,  SEG_SEQ, SEG_LEN, true) ->
+    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +1), State#state.responder_RCV_NXT, calculate_window(Direction, State))};
 
-storeState_RCV_NXT(initiator,     State,  SEG_SEQ_plus_1) ->
-    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ_plus_1), State#state.initiator_RCV_NXT, State#state.responder_RCV_WND)}; 
-
-storeState_RCV_NXT(responder,     State,  SEG_SEQ_plus_1) ->
-    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ_plus_1), State#state.responder_RCV_NXT, State#state.initiator_RCV_WND)};
-
-storeState_RCV_NXT(close_initiator,     State,  SEG_SEQ_plus_1) ->
-    State#state{close_initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ_plus_1), State#state.close_initiator_RCV_NXT, State#state.close_responder_RCV_WND)}; 
-
-storeState_RCV_NXT(close_responder,     State,  SEG_SEQ_plus_1) ->
-    State#state{close_responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ_plus_1), State#state.close_responder_RCV_NXT, State#state.close_initiator_RCV_WND)}.
-
-
-storeState_RCV_NXT(initiator,     State,  SEG_SEQ_plus_1, SEG_LEN) ->
-    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ_plus_1+SEG_LEN), State#state.initiator_RCV_NXT, State#state.responder_RCV_WND)}; 
-
-storeState_RCV_NXT(responder,     State,  SEG_SEQ_plus_1, SEG_LEN) ->
-    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ_plus_1+SEG_LEN), State#state.responder_RCV_NXT, State#state.initiator_RCV_WND)}.
-
+storeState_RCV_NXT(Direction = responder,     State,  SEG_SEQ, SEG_LEN, false) ->
+    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +0), State#state.responder_RCV_NXT, calculate_window(Direction, State))}.
 
 storeState_SND_UNA(_, State, _SEG_ACK, false) ->
     State;
@@ -1710,18 +1798,17 @@ storeState_SND_UNA(_, State, _SEG_ACK, false) ->
 storeState_SND_UNA(initiator, State, SEG_ACK, true) ->
     case test_ack_valid(initiator, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
+	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
-
 	    State
     end;
 
 storeState_SND_UNA(responder, State, SEG_ACK, true) ->
     case test_ack_valid(responder, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
+	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
@@ -1731,7 +1818,7 @@ storeState_SND_UNA(responder, State, SEG_ACK, true) ->
 storeState_SND_UNA(close_initiator, State, SEG_ACK, true) ->
     case test_ack_valid(close_initiator, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{close_initiator_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
+	    State#state{close_initiator_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
@@ -1741,29 +1828,31 @@ storeState_SND_UNA(close_initiator, State, SEG_ACK, true) ->
 storeState_SND_UNA(close_responder, State, SEG_ACK, true) ->
     case test_ack_valid(close_responder, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{close_responder_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
+	    State#state{close_responder_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
 	    State
     end.
+
+
 storeState_SND_UNA(initiator, State, _SEG_ACK, _Payload_length, false) ->
     State;
 
-storeState_SND_UNA(initiator, State, SEG_ACK, Payload_length, true) ->
+storeState_SND_UNA(initiator, State, SEG_ACK, _Payload_length, true) ->
     case test_ack_valid(initiator, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK, Payload_length)};
+	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK, -1)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
 	    State
     end;
 
-storeState_SND_UNA(responder, State, SEG_ACK, Payload_length, true) ->
+storeState_SND_UNA(responder, State, SEG_ACK, _Payload_length, true) ->
     case test_ack_valid(responder, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK, Payload_length)};
+	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK, -1)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
@@ -1793,7 +1882,7 @@ storeState_SND_WND_SCALE(initiator, State, ShiftCount) ->
     State#state{initiator_RCV_WND_SCALE = ShiftCount};
 
 storeState_SND_WND_SCALE(responder, State, ShiftCount) ->
-    State#state{initiator_RCV_WND_SCALE = ShiftCount}.
+    State#state{responder_RCV_WND_SCALE = ShiftCount}.
 
 
 copy_state_to_close_initiator_close_responder(initiator, State) -> 
