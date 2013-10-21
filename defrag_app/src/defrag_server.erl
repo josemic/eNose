@@ -229,34 +229,46 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {seq, Seqno} = lists:keyfind(seq, 1, Header),
             {ack, Ackno} = lists:keyfind(ack, 1, Header),
             {win, Win} = lists:keyfind(win, 1, Header),
-            {opt, Opt} = lists:keyfind(opt, 1, Header),
-            %%[_EtherIgnore, IP, Hdr, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
-	    %%case IP of
-	    %%	#ipv4{len = Len1, hl = HL} = IP ->
-            %%		#tcp{off = Off} = Hdr,
-            %%		PayloadSize = Len1 - (HL * 4) - (Off * 4);
-            %%
-	    %%	#ipv6{} ->
-	    %%		PayloadSize = byte_size(Payload)
-	    %%end,
-            [_EtherIgnore, IP, TCP, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}), 
+            {opt, OptBinary} = lists:keyfind(opt, 1, Header),
+            Opt = pkt:tcp_options(OptBinary),
+	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
             PayloadSize = payloadsize(IP, TCP),
-            <<Payload:PayloadSize/binary>>,
-	    case {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt} of
-		{false, true, false, false, _, _, _, _} -> % Syn
-                    StateNew1 = State#state{connection_worker_instance = State#state.connection_worker_instance + 1}, 	
-		    {ok, ConnectionWorkerPid} = defrag_root_sup:start_worker(
-						  StateNew1#state.connection_worker_instance, 
-						  {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-						   {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
-						   DLT, Time, Len, Packet, PayloadSize=0}, 
-						  StateNew1#state.child_worker_pid_list), 
-		    AddressTuple = {{Source_address, Source_port}, {Destination_address, Destination_port}},
-		    StateNew = StateNew1#state{connection_worker_pid_list = 
-						   insert_element(StateNew1#state.connection_worker_pid_list, {AddressTuple, ConnectionWorkerPid})};
-		_Other -> 
-		    %% drop packet, as it is out of band packet
-            	    StateNew = State
+            Payload = <<PayloadPadded:PayloadSize/binary>>,
+	    Chksum_ok = case IP of
+			    #ipv4{} ->
+				IPSum = pkt:makesum(IP),
+				TCPSum = pkt:makesum([IP, TCP, Payload]),
+				case [IPSum, TCPSum] of 
+				    [0,0] ->
+					true;
+				    [_,_] ->
+					io:format("Wrong checksum: {IPSum~p, TCPSum~p}~n Packet:~p~n", [IPSum, TCPSum, Packet]),
+					false
+				end;
+			    #ipv6{} ->
+				true % checksum not implemented for ipv6 
+			end,
+ 	    case Chksum_ok of
+		true ->
+		    case {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt} of
+			{false, true, false, false, _, _, _, _} -> % Syn
+			    StateNew1 = State#state{connection_worker_instance = State#state.connection_worker_instance + 1}, 	
+			    {ok, ConnectionWorkerPid} = defrag_root_sup:start_worker(
+							  StateNew1#state.connection_worker_instance, 
+							  {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
+							   {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
+							   DLT, Time, Len, Packet, PayloadSize=0}, 
+							  StateNew1#state.child_worker_pid_list), 
+			    AddressTuple = {{Source_address, Source_port}, {Destination_address, Destination_port}},
+			    StateNew = StateNew1#state{connection_worker_pid_list = 
+							   insert_element(StateNew1#state.connection_worker_pid_list, {AddressTuple, ConnectionWorkerPid})};
+			_Other -> 
+			    %% drop packet, as it is out of band packet
+			    StateNew = State
+                    end;
+		false ->
+                    StateNew = State,
+		    ok % ignore packet as checksum  not ok
 	    end;
 
 	{found, WorkerPid, _Any} ->
@@ -269,30 +281,39 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {seq, Seqno} = lists:keyfind(seq, 1, Header),
             {ack, Ackno} = lists:keyfind(ack, 1, Header),
             {win, Win} = lists:keyfind(win, 1, Header),
-            {opt, Opt} = lists:keyfind(opt, 1, Header),
-            %%[Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-            %%PayloadLength = byte_size(Payload),
-            %%[_EtherIgnore, IP, Hdr, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
-	    %%case IP of
-	    %%	#ipv4{len = Len1, hl = HL} = IP ->
-            %% 		#tcp{off = Off} = Hdr,
-            %% 		PayloadSize = Len1 - (HL * 4) - (Off * 4);
-            %%
-	    %%	#ipv6{} ->
-	    %%		PayloadSize = byte_size(Payload)
-	    %%end,
-            [_EtherIgnore, IP, TCP, Payload] = pkt:decapsulate({pkt:link_type(DLT), Packet}), 
-            PayloadSize = payloadsize(IP, TCP),
-            <<Payload:PayloadSize/binary>>,
+            {opt, OptBinary} = lists:keyfind(opt, 1, Header),
+            Opt = pkt:tcp_options(OptBinary),
+	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
+	    PayloadSize = payloadsize(IP, TCP),
+	    Payload = <<PayloadPadded:PayloadSize/binary>>,
 	    %% io:format("WorkerPid: ~p, packet ~p~n", [WorkerPid, 
 	    %%			      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
             %%		       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
 	    %%		       DLT, Time, Len, Packet, PayloadLength}]),
-	    defrag_worker:send_packet(WorkerPid, 
-				      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-				       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
-				       DLT, Time, Len, Packet, PayloadSize}),
-	    StateNew = State
+	    Chksum_ok = case IP of
+			    #ipv4{} ->
+				IPSum = pkt:makesum(IP),
+				TCPSum = pkt:makesum([IP, TCP, Payload]),
+				case [IPSum, TCPSum] of 
+				    [0,0] ->
+					true;
+				    [_,_] ->
+					io:format("Wrong checksum: {IPSum~p, TCPSum~p}~n Packet:~p~n", [IPSum, TCPSum, Packet]),
+					false
+				end;
+			    #ipv6{} ->
+				true % checksum not implemented for ipv6 
+			end,	    
+	    case Chksum_ok of
+                true -> 
+		    defrag_worker:send_packet(WorkerPid, 
+					      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
+					       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
+					       DLT, Time, Len, Packet, PayloadSize});
+		false ->
+		    ok % ignore packet as checksum is not ok			
+	    end,
+            StateNew = State
     end,
     {noreply, StateNew};
 handle_info(_Info, State) ->
@@ -371,14 +392,15 @@ get_connection_worker_pid_by_address_tuple(
 payloadsize(#ipv4{len = Len, hl = HL}, #tcp{off = Off}) ->
     Len - (HL * 4) - (Off * 4);
 
-% jumbo packet
+						% jumbo packet
 payloadsize(#ipv6{len = 0, next = Next}, #tcp{off = Off}) ->
-    % XXX handle jumbo packet here
+						% XXX handle jumbo packet here
+    io:format("Warning!!! Jumbo packet!!!"),
     0;
 payloadsize(#ipv6{len = Len, next = ?IPPROTO_TCP}, #tcp{off = Off}) ->
     Len - (Off * 4);
-% additional extension headeres
+						% additional extension headeres
 payloadsize(#ipv6{len = Len, next = Next}, #tcp{off = Off}) ->
-    % XXX handle extension headers here
+						% XXX handle extension headers here
+    io:format("Warning!!! Extension packet!!!"),
     0.
-
