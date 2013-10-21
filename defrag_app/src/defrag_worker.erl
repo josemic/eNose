@@ -189,12 +189,12 @@ init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, R
                responder_payload_store = []
 	      },
     Direction = initiator,
-    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
     StateNew1 = storeState_RCV_NXT(Direction , StateNew0,SEG_SEQ, Syn or Fin),
     StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
     StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
     case lists:keyfind(window_scale, 1, OPT) of 
-	{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
+	{window_scale, ShiftCount} ->
                StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
            false ->
                StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
@@ -239,7 +239,7 @@ state_listen( % this state ocurrs only after reset
 	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
-		{window_scale, [{shift_count, ShiftCount}, {multiplier, _Multiplier}]} ->
+		{window_scale, ShiftCount} ->
                     StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
@@ -283,7 +283,7 @@ state_syn_sent(
 	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
-		{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
+		{window_scale, ShiftCount} ->
                     StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % responder_RCV_WND_SCALE remains undefined
@@ -336,7 +336,7 @@ state_syn_sent(
 	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
-		{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
+		{window_scale, ShiftCount} ->
                     StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
@@ -365,7 +365,7 @@ state_syn_sent(
 	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
-		{window_scale, [{shift_count, ShiftCount}, {multiplier, Multiplier}]} ->
+		{window_scale, ShiftCount} ->
                     StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
                     StateNew  = StateNew3 % responder_RCV_WND_SCALE remains undefined
@@ -687,7 +687,7 @@ state_established(
 	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
 	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
 	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
-      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, Payload);
+      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>);
         false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State
@@ -711,7 +711,7 @@ state_established(
 	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
 	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
 	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
-      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, Payload);
+      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>);
 	false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State 
@@ -821,7 +821,7 @@ state_established(
     	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
 	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
 	    StateNew4 = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
-      	    StateNew  = storeState_Payload(initiator, StateNew4, SEG_SEQ, PayloadLength, Payload),
+      	    StateNew  = storeState_Payload(initiator, StateNew4, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
 	    NextStateName = state_fin_wait_1;
         false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
@@ -850,7 +850,7 @@ state_established(
     	    StateNew2 = storeState_RCV_NXT(Close_Direction , StateNew1, SEG_SEQ, Syn or Fin),
 	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
 	    StateNew4 = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
-      	    StateNew  = storeState_Payload(responder, StateNew4, SEG_SEQ, PayloadLength, Payload),
+      	    StateNew  = storeState_Payload(responder, StateNew4, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
 	    NextStateName = state_fin_wait_1;
         false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
@@ -962,7 +962,7 @@ state_fin_wait_1(
 	    StateNew3 = storeState_SND_UNA(Close_Direction , StateNew2, SEG_ACK, Ack),
 	    StateNew  = storeState_SND_WND(Close_Direction , StateNew3, SEG_WND),
      	    %% not possible because close responder payload store does not exist:
-            %%StateNew  = storeState_Payload(Close_Direction , StateNew4, SEG_SEQ, PayloadLength, Payload),
+            %%StateNew  = storeState_Payload(Close_Direction , StateNew4, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
 	    NextStateName = state_fin_wait_2,
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
 	false ->
@@ -991,7 +991,7 @@ state_fin_wait_1(
 	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
      	    %% not possible because close responder payload store does not exist:
-            %%StateNew  = storeState_Payload(Close_Direction , StateNew4, SEG_SEQ, PayloadLength, Payload),
+            %%StateNew  = storeState_Payload(Close_Direction , StateNew4, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
 	    NextStateName = state_fin_wait_1,
             log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
 	false ->
@@ -1258,7 +1258,7 @@ state_fin_finack_wait(
    {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port},
     {Close_responder_address, Close_responder_port}},
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
