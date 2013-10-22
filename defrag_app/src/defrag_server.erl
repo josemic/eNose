@@ -205,7 +205,7 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_info({packet, DLT, Time, Len, Packet}, State) ->
-    [_Ether, IP, Hdr, _Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
+    [_Ether, IP, Hdr, _Payload] = epcap_port_lib:decode(pkt:dlt(DLT), Packet),
     {Saddr, Daddr, _Proto} = case IP of
 				 #ipv4{saddr = S, daddr = D, p = P} ->
 				     {S,D,P};
@@ -230,8 +230,8 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {ack, Ackno} = lists:keyfind(ack, 1, Header),
             {win, Win} = lists:keyfind(win, 1, Header),
             {opt, OptBinary} = lists:keyfind(opt, 1, Header),
-            Opt = pkt:tcp_options(OptBinary),
-	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
+            Opt = pkt_tcp:options(OptBinary),
+	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:dlt(DLT), Packet}),
             PayloadSize = payloadsize(IP, TCP),
             Payload = <<PayloadPadded:PayloadSize/binary>>,
 	    Chksum_ok = case IP of
@@ -282,8 +282,8 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
             {ack, Ackno} = lists:keyfind(ack, 1, Header),
             {win, Win} = lists:keyfind(win, 1, Header),
             {opt, OptBinary} = lists:keyfind(opt, 1, Header),
-            Opt = pkt:tcp_options(OptBinary),
-	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:link_type(DLT), Packet}),
+            Opt = pkt_tcp:options(OptBinary),
+	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:dlt(DLT), Packet}),
 	    PayloadSize = payloadsize(IP, TCP),
 	    Payload = <<PayloadPadded:PayloadSize/binary>>,
 	    %% io:format("WorkerPid: ~p, packet ~p~n", [WorkerPid, 
