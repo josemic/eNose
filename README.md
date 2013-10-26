@@ -6,7 +6,31 @@ eNose
 
 0.01: Initial version
 
+## Preconditions
+
+   This tool checks the checksum of the received packages. In todays PCs the network card generates the checksums,
+   long time after the package has been captured by pcap. In order to avoid ignoring those packages due to failed
+   checksums it is important to deactivate checksum offloading.
+
+   Therefore before starting the tool check that all offloading had been deactivated.
+
+   ethtool --show-offload eth0
+   E.g.:
+   > 
+   > generic-receive-offload: on
+   >
+
+   If e.g. generic-receive-offloading is activated, deactiavte it using the following command:
+
+   ethtool -K eth0 gro off
+   
+   Similarly apply this to all other activated offload features.
+   
+   Note: 
+   This process has to be repeated after server start.
+
 ## QUICK SETUP
+
 
     cd eNose
     
@@ -15,7 +39,7 @@ eNose
 
     # if dependencies are not intalled automatically run the following and repeat the step above 
     # (please report back if it does not work without):
-    ./rebar get-deps    
+    ./rebar get-deps
 
         
     # Allow your user to epcap with root privs
