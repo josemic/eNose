@@ -34,7 +34,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/3,  send_packet/2, stop/1, smaller/2, smaller_or_equal/2]).
+-export([start_link/3, forward_sequence_no/3, modulo32bit/1, send_packet/2, stop/1, smaller/2, smaller_or_equal/2]).
 
 %% gen_fsm callbacks
 -export([
@@ -72,7 +72,7 @@
 -endif.
 
 -define(current_function_name(), 
-            element(2, element(2, process_info(self(), current_function)))).
+	element(2, element(2, process_info(self(), current_function)))).
 
 -record(state, {
 	  child_worker_list :: [pid()], 
@@ -104,8 +104,10 @@
 	  close_responder_SND_UNA::integer(),
           close_responder_RCV_WND::integer(),
           close_responder_RCV_WND_SCALE::integer(),
-          initiator_payload_store::[binary()],
-          responder_payload_store::[binary()],
+          initiator_payload_store::[tuple()],  % receive window
+          responder_payload_store::[tuple()],  % receive window
+          initiator_ack_payload_store::binary(),
+          responder_ack_payload_store::binary(),
           stack_trace_path::[atom()]
 	 }).
 
@@ -186,7 +188,9 @@ init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, R
 	       syn_ack_received = false,
                fin_ack_received = false,
                initiator_payload_store = [],
-               responder_payload_store = []
+               responder_payload_store = [],
+               initiator_ack_payload_store = <<>>,
+               responder_ack_payload_store = <<>>
 	      },
     Direction = initiator,
     StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
@@ -195,9 +199,9 @@ init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, R
     StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
     case lists:keyfind(window_scale, 1, OPT) of 
 	{window_scale, ShiftCount} ->
-               StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
-           false ->
-               StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
+	    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
+	false ->
+	    StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
     end,
     {ok, state_syn_sent, StateNew}.
 
@@ -620,7 +624,7 @@ state_syn_received(
    {Ack ,Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) ->
-   Direction = any,
+    Direction = any,
     StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_listen, StateNew, 10000}.
 
@@ -639,7 +643,7 @@ state_established(
     case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
 	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
-	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
         false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
@@ -662,7 +666,7 @@ state_established(
     case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ) of
 	true -> 
 	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
-	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
+	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew  = storeState_SND_WND(Direction , StateNew2, SEG_WND);
 	false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
@@ -684,10 +688,11 @@ state_established(
     StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ, PayloadLength) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
-	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
-	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
-      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>);
+	    StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
+	    StateNew2  = checkPayloadReceptionBuffer(Direction, StateNew1),
+	    %%StateNew3  = storeState_RCV_NXT(Direction, StateNew2, SEG_SEQ, PayloadLength, Syn or Fin),
+	    StateNew3  = storeState_SND_UNA(Direction, StateNew2, SEG_ACK, Ack),
+	    StateNew   = storeState_SND_WND(Direction, StateNew3, SEG_WND);                  
         false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State
@@ -708,10 +713,12 @@ state_established(
     StateNew0 =State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ, PayloadLength) of
 	true -> 
-	    StateNew1 = storeState_RCV_NXT(Direction , StateNew0, SEG_SEQ, PayloadLength, Syn or Fin),
-	    StateNew2 = storeState_SND_UNA(Direction , StateNew1, SEG_ACK, PayloadLength, Ack),
-	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
-      	    StateNew  = storeState_Payload(Direction , StateNew3, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>);
+	    StateNew1 = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
+	    StateNew2  = checkPayloadReceptionBuffer(Direction, StateNew1),
+	    %%StateNew3 = storeState_RCV_NXT(Direction, StateNew2, SEG_SEQ, PayloadLength, Syn or Fin),
+	    StateNew3 = storeState_SND_UNA(Direction, StateNew2, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Direction, StateNew3, SEG_WND);
+
 	false ->
             io:format("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction , SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State 
@@ -864,15 +871,15 @@ state_established(
   {packet_with_addressing,
    {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{Close_initiator_address, Close_initiator_port},
-   {Close_responder_address, Close_responder_port}}, 
+    {Close_responder_address, Close_responder_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Close_responder_address, 
       State#state.responder_port    == Close_responder_port,
       State#state.initiator_address == Close_initiator_address,
       State#state.initiator_port    == Close_initiator_port ->
-      Direction = initiator,
-      StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
-      StateNew = copy_state_to_close_initiator_close_responder(Direction , StateNew0),
+    Direction = initiator,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    StateNew = copy_state_to_close_initiator_close_responder(Direction , StateNew0),
     {next_state, state_time_wait, StateNew, 10000};
 
 state_established(
@@ -885,9 +892,9 @@ state_established(
       State#state.responder_port    == Close_responder_port,
       State#state.initiator_address == Close_initiator_address,
       State#state.initiator_port    == Close_initiator_port ->
-      Direction = responder,
-      StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
-      StateNew = copy_state_to_close_initiator_close_responder(Direction , StateNew0),
+    Direction = responder,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    StateNew = copy_state_to_close_initiator_close_responder(Direction , StateNew0),
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_wait_1(
@@ -1060,7 +1067,7 @@ state_fin_wait_1(
    {{Close_responder_address, Close_responder_port}, 
     {Close_initiator_address, Close_initiator_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
-      %PayloadLength /= 0, % Payload not empty!!!
+						%PayloadLength /= 0, % Payload not empty!!!
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1091,7 +1098,7 @@ state_fin_wait_1(
   {packet_with_addressing,
    {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{Close_initiator_address, Close_initiator_port},
-   {Close_responder_address, Close_responder_port}}, 
+    {Close_responder_address, Close_responder_port}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Close_responder_address, 
       State#state.responder_port    == Close_responder_port,
@@ -1129,7 +1136,7 @@ state_fin_wait_2(
     StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
 	true -> 
-    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0    , SEG_SEQ, Syn or Fin),
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
 	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
 	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND), 
 	    NextStateName = state_fin_wait_2;
@@ -1304,7 +1311,7 @@ state_fin_finack_wait(
    {Ack , Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) ->
-   Direction = any,
+    Direction = any,
     StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
@@ -1360,7 +1367,7 @@ state_fin_ack_fin_wait(
    {Ack ,Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) ->
-   Direction = any, 
+    Direction = any, 
     StateNew = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
@@ -1613,6 +1620,9 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
+modulo32bit(Value) when is_integer(Value)->
+    Value rem 16#100000000.
+
 add_modulo_32bit(Seqno, Offset) ->
     modulo32bit(Seqno+Offset).
 
@@ -1635,13 +1645,14 @@ forward_sequence_no(SeqnoNew, undefined, _Window) ->
 forward_sequence_no(SeqnoNew, SeqnoOld, Window) ->
     SeqA = modulo32bit(SeqnoNew),
     SeqB = modulo32bit(SeqnoOld), 
+    io:format("Forwarding sequence Number from ~p to ~p with Window:~p~n", [SeqB, SeqA, Window]),
     if 
 	SeqA >= SeqB ->
 	    if 
 		(SeqA - SeqB) =< Window ->
 		    SeqA;
 		true ->
-		    SeqB
+		    SeqB + Window
 	    end;		
 	true ->
 	    Delta = ((SeqA + 16#100000000) - SeqB),
@@ -1649,7 +1660,7 @@ forward_sequence_no(SeqnoNew, SeqnoOld, Window) ->
 		Delta =< Window ->
 		    SeqA;
 		true ->
-		    SeqB
+		    SeqB + Window
 	    end
     end.
 
@@ -1700,22 +1711,18 @@ ack_valid(SEG_ACK, SND_UNA, SND_WND) ->
 
 
 test_ack_valid(Direction = initiator, State, SEG_ACK) ->
-    ack_valid(SEG_ACK, State#state.initiator_SND_UNA, 
-             calculate_window(Direction, State));
+    ack_valid(SEG_ACK, State#state.initiator_SND_UNA, calculate_window(Direction, State));
 
 test_ack_valid(Direction = responder, State, SEG_ACK) ->
-    ack_valid(SEG_ACK, State#state.responder_SND_UNA, 
-              calculate_window(Direction, State));
+    ack_valid(SEG_ACK, State#state.responder_SND_UNA, calculate_window(Direction, State));
 
 test_ack_valid(Direction = close_initiator, State, SEG_ACK) ->
-    ack_valid(SEG_ACK, State#state.close_initiator_SND_UNA, 
-              calculate_window(Direction, State));
+    ack_valid(SEG_ACK, State#state.close_initiator_SND_UNA, calculate_window(Direction, State));
 
 test_ack_valid(Direction = close_responder, State, SEG_ACK) ->
-    ack_valid(SEG_ACK, State#state.close_responder_SND_UNA, 
-              calculate_window(Direction, State)).
+    ack_valid(SEG_ACK, State#state.close_responder_SND_UNA, calculate_window(Direction, State)).
 
-%% if any of te side did not set the window scale in the options filed, the scale is not used (See RFC 1323)
+%% if any of the side did not set the window scale in the options filed, the scale is not used (See RFC 1323)
 
 
 
@@ -1738,46 +1745,46 @@ test_sequence_no_in_window(Direction = close_responder, State, SEG_SEQ) ->
 
 test_sequence_no_in_window(Direction = initiator, State, SEG_SEQ, SEG_LEN) ->
     sequence_no_in_window(SEG_SEQ, State#state.initiator_RCV_NXT, 
-                           calculate_window(Direction, State), SEG_LEN);
+			  calculate_window(Direction, State), SEG_LEN);
 
 test_sequence_no_in_window(Direction = responder, State, SEG_SEQ, SEG_LEN) ->
     sequence_no_in_window(SEG_SEQ, State#state.responder_RCV_NXT, 
-                           calculate_window(Direction, State), SEG_LEN);
+			  calculate_window(Direction, State), SEG_LEN);
 
 test_sequence_no_in_window(Direction = close_initiator, State, SEG_SEQ, SEG_LEN) ->
     sequence_no_in_window(SEG_SEQ, State#state.close_initiator_RCV_NXT, 
-                           calculate_window(Direction, State), SEG_LEN);
+			  calculate_window(Direction, State), SEG_LEN);
 
 test_sequence_no_in_window(Direction = close_responder, State, SEG_SEQ, SEG_LEN) ->
     sequence_no_in_window(SEG_SEQ, State#state.close_responder_RCV_NXT, 
                           calculate_window(Direction, State), SEG_LEN).
 
 calculate_window(initiator, State) ->
-	calculate_window(State#state.initiator_RCV_WND, State#state.initiator_RCV_WND_SCALE, State#state.responder_RCV_WND_SCALE);
+    calculate_window(State#state.initiator_RCV_WND, State#state.initiator_RCV_WND_SCALE, State#state.responder_RCV_WND_SCALE);
 
 calculate_window(responder, State) ->
-	calculate_window(State#state.responder_RCV_WND, State#state.responder_RCV_WND_SCALE, State#state.initiator_RCV_WND_SCALE);
+    calculate_window(State#state.responder_RCV_WND, State#state.responder_RCV_WND_SCALE, State#state.initiator_RCV_WND_SCALE);
 
 calculate_window(close_initiator, State) ->
-	calculate_window(State#state.close_initiator_RCV_WND, State#state.close_initiator_RCV_WND_SCALE, State#state.close_responder_RCV_WND_SCALE);
+    calculate_window(State#state.close_initiator_RCV_WND, State#state.close_initiator_RCV_WND_SCALE, State#state.close_responder_RCV_WND_SCALE);
 
 calculate_window(close_responder, State) ->
-	calculate_window(State#state.close_responder_RCV_WND, State#state.close_responder_RCV_WND_SCALE, State#state.close_initiator_RCV_WND_SCALE).
+    calculate_window(State#state.close_responder_RCV_WND, State#state.close_responder_RCV_WND_SCALE, State#state.close_initiator_RCV_WND_SCALE).
 
 calculate_window(WND, undefined, undefined) ->
-         WND;
+    WND;
 
 calculate_window(WND, _WND_SCALE, undefined) ->
-         WND;
+    WND;
 
 calculate_window(WND, undefined, _PEER_SIDE_WND_SCALE) ->
-         WND;
+    WND;
 
 calculate_window(WND, WND_SCALE, _PEER_SIDE_WND_SCALE) when WND_SCALE =< 14->
-         WND bsl WND_SCALE;
+    WND bsl WND_SCALE;
 
 calculate_window(WND, _WND_SCALE, _PEER_SIDE_WND_SCALE)->
-         WND bsl 14.
+    WND bsl 14.
 
 storeState_RCV_NXT(Direction = initiator,     State,  SEG_SEQ, true) ->
     State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 1), State#state.initiator_RCV_NXT, calculate_window(Direction, State))}; 
@@ -1803,17 +1810,33 @@ storeState_RCV_NXT(Direction = close_responder,     State,  SEG_SEQ, true) ->
 storeState_RCV_NXT(Direction = close_responder,     State,  SEG_SEQ, false) ->
     State#state{close_responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ + 0), State#state.close_responder_RCV_NXT, calculate_window(Direction, State))}.
 
-storeState_RCV_NXT(Direction = initiator,     State,  SEG_SEQ, SEG_LEN, true) ->
-    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +1), State#state.initiator_RCV_NXT, calculate_window(Direction, State))}; 
+storeState_RCV_NXT(Direction = initiator, #state{initiator_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, true) 
+  when (RCV_NXT == SEG_SEQ)->
+    io:format("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port, RCV_NXT, SEG_SEQ]),
+    State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +1), State#state.initiator_RCV_NXT, calculate_window(Direction, State))};
 
-storeState_RCV_NXT(Direction = initiator,     State,  SEG_SEQ, SEG_LEN, false) ->
+storeState_RCV_NXT(Direction = initiator, #state{initiator_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, false) 
+  when (RCV_NXT == SEG_SEQ)->
+    io:format("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port,RCV_NXT, SEG_SEQ]),
     State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN + 0), State#state.initiator_RCV_NXT, calculate_window(Direction, State))}; 
 
-storeState_RCV_NXT(Direction = responder,     State,  SEG_SEQ, SEG_LEN, true) ->
+storeState_RCV_NXT(Direction = responder, #state{responder_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, true)
+  when (RCV_NXT == SEG_SEQ)->
+    io:format("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
     State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +1), State#state.responder_RCV_NXT, calculate_window(Direction, State))};
 
-storeState_RCV_NXT(Direction = responder,     State,  SEG_SEQ, SEG_LEN, false) ->
-    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +0), State#state.responder_RCV_NXT, calculate_window(Direction, State))}.
+storeState_RCV_NXT(Direction = responder,  #state{responder_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, false)
+  when (RCV_NXT == SEG_SEQ)->
+    io:format("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
+    State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +0), State#state.responder_RCV_NXT, calculate_window(Direction, State))};
+
+storeState_RCV_NXT(initiator,  #state{initiator_RCV_NXT = RCV_NXT} = State, SEG_SEQ, _SEG_LEN, _Bool) ->
+    io:format("Ports: ~p <-> ~p RCV_NXT:~p does not matches SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port,RCV_NXT, SEG_SEQ]),
+    State;
+
+storeState_RCV_NXT(responder,  #state{responder_RCV_NXT = RCV_NXT} = State, SEG_SEQ, _SEG_LEN, _Bool) ->
+    io:format("Ports: ~p <-> ~p RCV_NXT:~p does not matches SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
+    State.
 
 storeState_SND_UNA(_, State, _SEG_ACK, false) ->
     State;
@@ -1821,7 +1844,8 @@ storeState_SND_UNA(_, State, _SEG_ACK, false) ->
 storeState_SND_UNA(initiator, State, SEG_ACK, true) ->
     case test_ack_valid(initiator, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
+            io:format("Valid Ack!! Forwarding SND_UNA from:  ~p to: ~p~n",[State#state.initiator_SND_UNA, add_modulo_32bit(SEG_ACK,0)]),
+	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
@@ -1831,7 +1855,8 @@ storeState_SND_UNA(initiator, State, SEG_ACK, true) ->
 storeState_SND_UNA(responder, State, SEG_ACK, true) ->
     case test_ack_valid(responder, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
+            io:format("Valid Ack!! Forwarding SND_UNA from:  ~p to: ~p~n",[State#state.responder_SND_UNA, add_modulo_32bit(SEG_ACK,0)]),
+	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
@@ -1841,7 +1866,7 @@ storeState_SND_UNA(responder, State, SEG_ACK, true) ->
 storeState_SND_UNA(close_initiator, State, SEG_ACK, true) ->
     case test_ack_valid(close_initiator, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{close_initiator_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
+	    State#state{close_initiator_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
@@ -1851,31 +1876,7 @@ storeState_SND_UNA(close_initiator, State, SEG_ACK, true) ->
 storeState_SND_UNA(close_responder, State, SEG_ACK, true) ->
     case test_ack_valid(close_responder, State, SEG_ACK) of
 	valid_ack ->
-	    State#state{close_responder_SND_UNA = add_modulo_32bit(SEG_ACK,-1)};
-	repetition_ack ->
-	    State;
-	invalid_ack ->
-	    State
-    end.
-
-
-storeState_SND_UNA(initiator, State, _SEG_ACK, _Payload_length, false) ->
-    State;
-
-storeState_SND_UNA(initiator, State, SEG_ACK, _Payload_length, true) ->
-    case test_ack_valid(initiator, State, SEG_ACK) of
-	valid_ack ->
-	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK, -1)};
-	repetition_ack ->
-	    State;
-	invalid_ack ->
-	    State
-    end;
-
-storeState_SND_UNA(responder, State, SEG_ACK, _Payload_length, true) ->
-    case test_ack_valid(responder, State, SEG_ACK) of
-	valid_ack ->
-	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK, -1)};
+	    State#state{close_responder_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
 	repetition_ack ->
 	    State;
 	invalid_ack ->
@@ -1895,11 +1896,17 @@ storeState_SND_WND(close_initiator, State, SEG_WND) ->
 storeState_SND_WND(close_responder, State, SEG_WND) ->		
     State#state{close_responder_RCV_WND = SEG_WND}.
 
-storeState_Payload(initiator, State, SEG_SEQ, PayloadLength, Payload) ->
-    State#state{initiator_payload_store = [{SEG_SEQ, PayloadLength, Payload}|State#state.initiator_payload_store]};
+storeState_Payload(Direction = initiator, State, SEG_SEQ, PayloadLength, Payload) ->
+    SmallerOrEqualFun = fun({A,_, _},{B,_, _}) -> A =< B end,
+    StateNew = State#state{initiator_payload_store = lists:sort(SmallerOrEqualFun, [{SEG_SEQ, PayloadLength, Payload}|State#state.initiator_payload_store])}, 
+    io:format("PayloadStore Direction ~p contains now ~p packages~n",[Direction, length(StateNew#state.initiator_payload_store)]), 
+     StateNew;
 
-storeState_Payload(responder, State, SEG_SEQ, PayloadLength, Payload) ->
-    State#state{responder_payload_store = [{SEG_SEQ, PayloadLength, Payload}|State#state.responder_payload_store]}.
+storeState_Payload(Direction = responder, State, SEG_SEQ, PayloadLength, Payload) ->
+    SmallerOrEqualFun = fun({A,_, _},{B,_, _}) -> A =< B end,
+    StateNew = State#state{responder_payload_store = lists:sort(SmallerOrEqualFun, [{SEG_SEQ, PayloadLength, Payload}|State#state.responder_payload_store])},
+    io:format("PayloadStore Direction: ~p contains now ~p packages~n",[Direction, length(StateNew#state.responder_payload_store)]), 
+     StateNew.
 
 storeState_SND_WND_SCALE(initiator, State, ShiftCount) ->
     State#state{initiator_RCV_WND_SCALE = ShiftCount};
@@ -1951,8 +1958,44 @@ log_close_initiator_close_responder(StateName, SEG_SEQ, SEG_ACK, SEG_WND, State)
     %%        io:format("cr_address: ~p, cr_port : ~w, cr_RCV_WND ~w, cr_SND_UNA: ~w, cr_RCV_NXT: ~w~n", [State#state.close_responder_address, State#state.close_responder_port, State#state.close_responder_RCV_WND, 	State#state.close_responder_SND_UNA, State#state.close_responder_RCV_NXT]),
     true.
 
-modulo32bit(Value) ->
-    Value rem 16#100000000.
+checkPayloadReceptionBuffer(Direction=initiator, #state{initiator_payload_store = []} = State) ->
+    io:format("Check payload_store: Payloadstore in Direction ~p is empty~n", [Direction]), 
+    State;
 
+checkPayloadReceptionBuffer(Direction=responder, #state{responder_payload_store = []} = State) ->
+    io:format("Check payload_store: Payloadstore in Direction ~p is empty~n", [Direction]),
+    State;
+
+checkPayloadReceptionBuffer(Direction=initiator, #state{initiator_RCV_NXT = RCV_NXT, initiator_payload_store = [{SEG_SEQ, PayloadLength, Payload}|PayloadFrames]} = State) ->
+    RCV_NXT32 = modulo32bit(RCV_NXT),
+    SEG_SEQ32 = modulo32bit(SEG_SEQ),
+    case RCV_NXT32 == SEG_SEQ32 of 
+	true ->
+            io:format("Check payload_store: Payloadstore in Direction ~p has first payload with:~p bytes~n", [Direction, PayloadLength]),
+            Ack_payload_store = State#state.initiator_ack_payload_store,
+	    StateNew1 = State#state{initiator_ack_payload_store = <<Ack_payload_store/binary, Payload/binary>>},
+	    StateNew2 = storeState_RCV_NXT(Direction, StateNew1, SEG_SEQ, PayloadLength, false),
+            StateNew  = StateNew2#state{initiator_payload_store = PayloadFrames},
+	    checkPayloadReceptionBuffer(Direction, StateNew);
+	false ->
+            io:format("Check payload failed!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p~n",[Direction, SEG_SEQ, RCV_NXT]),
+	    StateNew = State
+    end;
+
+checkPayloadReceptionBuffer(Direction=responder, #state{responder_RCV_NXT = RCV_NXT, responder_payload_store = [{SEG_SEQ, PayloadLength, Payload}|PayloadFrames]} = State) ->
+    RCV_NXT32 = modulo32bit(RCV_NXT),
+    SEG_SEQ32 = modulo32bit(SEG_SEQ),
+    case (RCV_NXT32 == SEG_SEQ32) of 
+	true ->
+            io:format("Check payload_store: Payloadstore in Direction ~p has first payload with:~p bytes~n", [Direction, PayloadLength]),
+            Ack_payload_store = State#state.responder_ack_payload_store,
+	    StateNew1 = State#state{responder_ack_payload_store = <<Ack_payload_store/binary, Payload/binary>>},
+	    StateNew2  = storeState_RCV_NXT(Direction, StateNew1, SEG_SEQ, PayloadLength, false),
+            StateNew   = StateNew2#state{responder_payload_store = PayloadFrames},
+	    checkPayloadReceptionBuffer(Direction, StateNew);
+	false ->
+            io:format("Check payload failed!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p",[Direction, SEG_SEQ, RCV_NXT]),
+	    StateNew = State
+    end. 
 
 
