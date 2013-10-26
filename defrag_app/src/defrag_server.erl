@@ -242,7 +242,8 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 				    [0,0] ->
 					true;
 				    [_,_] ->
-					io:format("Wrong checksum: {IPSum~p, TCPSum~p}~n Packet:~p~n", [IPSum, TCPSum, Packet]),
+                                        #ipv4{saddr = S, daddr = D, p = P}, 
+					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [S,D,P, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
 					false
 				end;
 			    #ipv6{} ->
@@ -297,8 +298,9 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 				case [IPSum, TCPSum] of 
 				    [0,0] ->
 					true;
-				    [_,_] ->
-					io:format("Wrong checksum: {IPSum~p, TCPSum~p}~n Packet:~p~n", [IPSum, TCPSum, Packet]),
+                                    [_,_] ->
+                                        #ipv4{saddr = S, daddr = D, p = P}, 
+					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [S,D,P, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
 					false
 				end;
 			    #ipv6{} ->
