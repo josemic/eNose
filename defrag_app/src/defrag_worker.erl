@@ -108,6 +108,8 @@
           responder_payload_store::[tuple()],  % receive window
           initiator_ack_payload_store::binary(),
           responder_ack_payload_store::binary(),
+          initiator_sack_permitted::binary(),
+	  responder_sack_permitted::binary(),
           stack_trace_path::[atom()]
 	 }).
 
@@ -190,7 +192,9 @@ init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, R
                initiator_payload_store = [],
                responder_payload_store = [],
                initiator_ack_payload_store = <<>>,
-               responder_ack_payload_store = <<>>
+               responder_ack_payload_store = <<>>,
+               initiator_sack_permitted=undefined,
+               responder_sack_permitted=undefined
 	      },
     Direction = initiator,
     StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path]},
@@ -199,9 +203,15 @@ init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, R
     StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
     case lists:keyfind(window_scale, 1, OPT) of 
 	{window_scale, ShiftCount} ->
-	    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
+	    StateNew4  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
 	false ->
-	    StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
+	    StateNew4  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
+    end,
+    case lists:keyfind(sack_permitted, 1, OPT) of 
+	{sack_permitted, true} ->
+            StateNew  = storeState_SACK_PERMITTED(Direction , StateNew4);            
+         false ->
+            StateNew  = StateNew4 % responder_sack_permitted remains undefined
     end,
     {ok, state_syn_sent, StateNew}.
 
@@ -244,9 +254,15 @@ state_listen( % this state ocurrs only after reset
 	    StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
 		{window_scale, ShiftCount} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
+                    StateNew4  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
-                    StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
+                    StateNew4  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
+            end,
+            case lists:keyfind(sack_permitted, 1, OPT) of 
+		{sack_permitted, true} ->
+                    StateNew  = storeState_SACK_PERMITTED(Direction , StateNew4);            
+                false ->
+                    StateNew  = StateNew4 % responder_sack_permitted remains undefined
             end,
 	    NextStateName = state_syn_sent;
 	false ->
@@ -288,10 +304,16 @@ state_syn_sent(
 	    StateNew3  = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
 		{window_scale, ShiftCount} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
+                    StateNew4  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
-                    StateNew  = StateNew3 % responder_RCV_WND_SCALE remains undefined
+                    StateNew4  = StateNew3 % responder_RCV_WND_SCALE remains undefined
             end,
+            case lists:keyfind(sack_permitted, 1, OPT) of 
+		{sack_permitted, true} ->
+                    StateNew  = storeState_SACK_PERMITTED(Direction , StateNew4);            
+                false ->
+                    StateNew  = StateNew4 % responder_sack_permitted remains undefined
+            end,            
 	    NextStateName = state_syn_sent;
 	false ->
 	    StateNew = State,
@@ -341,9 +363,15 @@ state_syn_sent(
 	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
 		{window_scale, ShiftCount} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
+                    StateNew4  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
-                    StateNew  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
+                    StateNew4  = StateNew3 % initiator_RCV_WND_SCALE remains undefined
+            end,
+            case lists:keyfind(sack_permitted, 1, OPT) of 
+		{sack_permitted, true} ->
+                    StateNew  = storeState_SACK_PERMITTED(Direction , StateNew4);            
+                false ->
+                    StateNew  = StateNew4 % responder_sack_permitted remains undefined
             end,
 	    NextStateName = state_syn_sent;
 	false ->
@@ -370,9 +398,15 @@ state_syn_sent(
 	    StateNew3 = storeState_SND_WND(Direction , StateNew2, SEG_WND),
             case lists:keyfind(window_scale, 1, OPT) of 
 		{window_scale, ShiftCount} ->
-                    StateNew  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
+                    StateNew4  = storeState_SND_WND_SCALE(Direction , StateNew3, ShiftCount);            
                 false ->
-                    StateNew  = StateNew3 % responder_RCV_WND_SCALE remains undefined
+                    StateNew4  = StateNew3 % responder_RCV_WND_SCALE remains undefined
+            end,
+            case lists:keyfind(sack_permitted, 1, OPT) of 
+		{sack_permitted, true} ->
+                    StateNew  = storeState_SACK_PERMITTED(Direction , StateNew4);            
+                false ->
+                    StateNew  = StateNew4 % responder_sack_permitted remains undefined
             end,
 	    NextStateName = state_syn_syn_ack_sent;
 	false ->
@@ -1999,3 +2033,23 @@ checkPayloadReceptionBuffer(Direction=responder, #state{responder_RCV_NXT = RCV_
     end. 
 
 
+storeState_SACK_PERMITTED(Direction = initiator, State) ->
+        State#state{initiator_sack_permitted = true};
+
+storeState_SACK_PERMITTED(Direction = responder, State) ->
+        State#state{responder_sack_permitted = true}.
+
+does_connection_support_SACK(State) ->
+	does_connection_support_SACK(State#state.initiator_sack_permitted, State#state.responder_sack_permitted).
+
+does_connection_support_SACK(undefined, undefined) ->
+        false;
+
+does_connection_support_SACK(true, undefined) ->
+        false;
+
+does_connection_support_SACK(undefined, true) ->
+        false;
+
+does_connection_support_SACK(true, true) ->
+        true.
