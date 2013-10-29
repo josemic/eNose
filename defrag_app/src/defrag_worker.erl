@@ -1342,6 +1342,35 @@ state_fin_finack_wait(
 
 state_fin_finack_wait(
   {packet_with_addressing,
+   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
+   {{Close_responder_address, Close_responder_port}, 
+    {Close_initiator_address, Close_initiator_port}}, 
+   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+      State#state.close_responder_address == Close_responder_address, 
+      State#state.close_responder_port    == Close_responder_port,
+      State#state.close_initiator_address == Close_initiator_address,
+      State#state.close_initiator_port    == Close_initiator_port ->
+    Close_Direction = close_responder,
+    StateNew0 = State#state{stack_trace_path=[{?current_function_name(),Close_Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
+    case test_sequence_no_in_window(Close_Direction , StateNew0, SEG_SEQ) of
+	true -> 
+    	    StateNew1 = storeState_RCV_NXT(Close_Direction , StateNew0, SEG_SEQ, Syn or Fin),
+	    StateNew2 = storeState_SND_UNA(Close_Direction , StateNew1, SEG_ACK, Ack),
+	    StateNew  = storeState_SND_WND(Close_Direction , StateNew2, SEG_WND),
+	    NextStateName = state_fin_finack_wait,
+            log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew);
+        false ->
+            StateNew = State,
+            NextStateName = state_fin_finack_wait, 
+            log_close_initiator_close_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
+    end,
+    {next_state, NextStateName, StateNew};
+
+
+
+
+state_fin_finack_wait(
+  {packet_with_addressing,
    {Ack , Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
    {{_, _},{_,_}}, 
    DLT, Time, Len, Packet, PayloadLength}, State) ->
