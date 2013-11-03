@@ -1,4 +1,3 @@
-%% Copyright (c) 2009-2013, Michael Santos <michael.santos@gmail.com>
 %% All rights reserved.
 %%
 %% Redistribution and use in source and binary forms, with or without
@@ -74,7 +73,12 @@ init([Instance, Options]) ->
     {ok, #state{instance = Instance, options = Options, pid_list = []}, 0}.
 
 handle_call({register_child_worker_Pid, ChildWorkerPid}, _From, State) ->
-    NewState = State#state{instance = State#state.instance+1, pid_list = [ChildWorkerPid|State#state.pid_list]},
+    case lists:member(ChildWorkerPid, State#state.pid_list) of
+    	false -> 
+	    NewState = State#state{instance = State#state.instance+1, pid_list = [ChildWorkerPid|State#state.pid_list]};
+	true ->
+	    NewState = State %% already in list
+    end,
     {reply, ok, NewState};
 handle_call({unregister_child_worker_Pid,  ChildWorkerPid}, _From, State) ->
     Pid_list = lists:delete(ChildWorkerPid, State#state.pid_list),
