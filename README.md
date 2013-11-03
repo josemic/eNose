@@ -28,7 +28,8 @@ eNose
    
    Note: 
    This has to be repeated after server start.
-
+   See also: https://github.com/msantos/pkt/issues/9
+  
 ## QUICK SETUP
 
 
@@ -61,12 +62,12 @@ eNose
     application:start(content).
     
     MatchFun1 = fun(Payload) -> 
-			A = parser_combinator_bitstring:pBinarystring(<<"www.heise.de">>),
+			A = parser_combinator_bitstring:pBinarystring(<<"GET">>),
 			B = parser_combinator_bitstring:pUntilN( A, 100 ),
 			C = parser_combinator_bitstring:pBinarystringCaseInsensitive(<<"MELDUNG">>),
 			D = parser_combinator_bitstring:pBetweenN(B, C,14),
 			parser_combinator_bitstring:parse(D,Payload) end.
-    % matches for content that started with "www.heise.de" within the first 100 chanracters
+    % matches for content that started with "GET" within the first 100 chanracters
     % followed by the not case sensitive text "MELDUNG" e.g. "Meldung" within 14 characters
     % There are almost unlimited options with the given parser combiantor. See the parser_combinator_bitstring module
     % in the content_app/src directory and the examples in the parsertest module in the same directory.
@@ -77,7 +78,7 @@ eNose
     observer:start(). % go to tab "Application", optional
     % if you use an older Erlang release try appmon:start().
 
-     {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}, {message, "Found: www.heise.de*Meldung*"}]}]).
+     {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}]}, {content, [{matchfun, MatchFun1}, {message, "Found: GET*Meldung*"}]}]).
 
     or
 
@@ -130,6 +131,14 @@ eNose
 
         The Packet is a binary holding the captured data.
 
+    2) defrag: 
+        Defragments the incoming tcp stream into packages of 1500 bytes. Tracks sequence numbers and acknowleges. 
+        Forwards the received content e.g. towards the configured "content"-app. 
+
+
+    3) content:
+        The content filter was described in the examples above. It filters content received from epcap_port or from defrag based upon 
+        strings.
 
 ## PF_RING
         This section refers to epcap, not to the epcap_port app and is automatically downloaded 
