@@ -132,7 +132,32 @@ init([Instance, OptionElementSorted]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call({payload_section, Saddr, Sport, Daddr, Dport, Payload}, _From, State) ->
+    Proto = tcp,
+    Matchfun = State#state.matchfun,
+    case (Matchfun(Payload)) of
+	fail ->
+	    ok;
+	_     ->
+	    error_logger:info_msg("Logging: Instance: ~p, PID: ~p",[State#state.instance, self()]),
+	    error_logger:info_msg("Message: ~p~n",[State#state.message]),
+	    error_logger:info_report([
+				      self(),	   
+						% Source
+				      {source_address, Saddr},
+				      {source_port, Sport},
 
+						% Destination
+				      {destination_address, Daddr},
+				      {destination_port,Dport},
+
+				      {protocol, Proto},
+				      {payload_bytes, byte_size(Payload)},
+				      {payload, epcap_port_lib:payload(Payload)}
+				     ])
+    end,
+    Reply = ok,
+    {reply, Reply, State};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 handle_call(_Request, _From, State) ->
