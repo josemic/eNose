@@ -26,20 +26,20 @@ s()->
     %%dbg:p(new, m),
     %%dbg:p(new, p),
     MatchFun1 = fun(Payload) -> 
-			A = parser_combinator_bitstring:pBinarystring(<<"www.heise.de">>),
+			A = parser_combinator_bitstring:pBinarystring(<<"GET">>),
 			B = parser_combinator_bitstring:pUntilN( A, 100 ),
 			C = parser_combinator_bitstring:pBinarystringCaseInsensitive(<<"MELDUNG">>),
 			E = parser_combinator_bitstring:pBetweenN(B, C,14),
 			parser_combinator_bitstring:parse(E,Payload) end,
 
-    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}]}, {defrag, []}, {content, [{matchfun, MatchFun1}, {message, "Found: www.heise.de*Meldung*"}]}]),
+    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}]}, {defrag, []}, {content, [{matchfun, MatchFun1}, {message, "Found: GET*Meldung*"}]}]),
     io:format("Start result 1: ~p~n",[Result1]),
     MatchFun2 = fun(Payload) -> 
-			A = parser_combinator_bitstring:pBinarystring(<<"www.heise.de">>),
+			A = parser_combinator_bitstring:pBinarystring(<<"GET">>),
 			B = parser_combinator_bitstring:pUntilN( A, 100 ),
 			C = parser_combinator_bitstring:pBinarystringCaseInsensitive(<<"thema">>),
 			E = parser_combinator_bitstring:pBetweenN(B, C,14),
-			parser_combinator_bitstring:parse(E,Payload) end.
-    %%{ok, Result2} = rule:start([{epcap_port,[{interface, "tcp"}]}, {defrag, []}, {content, [{matchfun, MatchFun2},{message, "Found: www.heise.de*Thema*"}]}]),
-    %%io:format("Start result 2: ~p~n",[Result2]).
+			parser_combinator_bitstring:parse(E,Payload) end,
+    {ok, Result2} = rule:start([{epcap_port,[{interface, "eth0"}]}, {defrag, []}, {content, [{matchfun, MatchFun2}, {message, "Found: GET*Thema*"}]}]),
+    io:format("Start result 2: ~p~n",[Result2]).
 
