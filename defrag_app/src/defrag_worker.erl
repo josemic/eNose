@@ -131,7 +131,7 @@ start_link(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, SEG_SEQ, SEG_
 	lists:flatten(io_lib:format("~p", [Responder_port])),
     Name = list_to_atom (Name_s),
     error_logger:info_report("gen_server:start_link(~p)~n",[[{local, Name},?MODULE,[],[],self()]]),
-    Dbg_fun = fun(FuncState, Event, ProcState) -> error_logger:warning_report("~nDebugFun:~n-FuncState:~p~n-Event:~p~n-ProcState:~p~n", [FuncState, Event, ProcState]) end,
+    %%Dbg_fun = fun(FuncState, Event, ProcState) -> error_logger:warning_report("~nDebugFun:~n-FuncState:~p~n-Event:~p~n-ProcState:~p~n", [FuncState, Event, ProcState]) end,
     gen_fsm:start_link({local,Name},?MODULE,[Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
 							AddressTuple, DLT, Time, Len, Packet, PayloadLength=0}, ChildWorkerList],[?GEN_FSM_OPTS]).
 
@@ -163,9 +163,9 @@ send_packet(WorkerPid, Message) ->
 %% @end
 %%--------------------------------------------------------------------
 
-init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
+init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, 
 		AddressTuple, 
-		DLT, Time, Len, Packet, PayloadLength=0}, ChildWorkerList]) ->
+		_DLT, _Time, _Len, _Packet, _PayloadLength=0}, ChildWorkerList]) ->
     {{Initiator_address, Initiator_port},{Responder_address, Responder_port}} = AddressTuple,
     State = #state{
 	       instance = Instance, 
@@ -229,9 +229,9 @@ init([Instance,{packet_with_addressing, {Ack = false, Syn = true, Fin = false, R
 %%		DLT, Time, Len, Packet, PayloadLength=0}),
 state_listen( % this state ocurrs only after reset
   {packet_with_addressing, 
-   {Ack = false, Syn = true, Fin = false, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn after Rst
+   {Ack = false, Syn = true, Fin = false, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn after Rst
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -265,10 +265,10 @@ state_listen( % this state ocurrs only after reset
 
 state_listen(
   {packet_with_addressing,
-   {Ack= true, Syn, Fin, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {_Ack= true, _Syn, _Fin, _Rst = false, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Ack
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) ->
-    Direction = any,
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) ->
+    _Direction = any,
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     %% ignore all Ack packages // RCF 793 p. 65
     {next_state, state_listen, StateNew};
@@ -279,9 +279,9 @@ state_listen(timeout, State) ->
 
 state_syn_sent(
   {packet_with_addressing, 
-   {Ack = false, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn (when Ack received before)
+   {Ack = false, Syn = true, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn (when Ack received before)
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when
       State#state.syn_ack_received == true, % !!!!!!!! Ack received before
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
@@ -315,9 +315,9 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing, 
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -339,9 +339,9 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing, 
-   {Ack = false, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn retransmission
+   {Ack = false, Syn = true, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn retransmission
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -374,9 +374,9 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing, 
-   {Ack = true, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn-Ack
+   {Ack = true, Syn = true, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn-Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -409,9 +409,9 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -434,9 +434,9 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing,
-   {Ack = false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin
+   {Ack = false, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -459,18 +459,18 @@ state_syn_sent(
 
 state_syn_sent(
   {packet_with_addressing,
-   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack, _Syn, _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
-    Direction = any, 
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
+    _Direction = any, 
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_listen, StateNew, 10000}.
 
 state_syn_syn_ack_sent(
   {packet_with_addressing, 
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -491,9 +491,9 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing, 
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack retransmission
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -514,9 +514,9 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -539,9 +539,9 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin / Fin-Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -565,18 +565,18 @@ state_syn_syn_ack_sent(
 
 state_syn_syn_ack_sent(
   {packet_with_addressing,
-   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack, _Syn, _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
-    Direction = any,
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
+    _Direction = any,
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_listen, StateNew, 10000}.
 
 state_syn_received(
   {packet_with_addressing, 
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -597,9 +597,9 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -622,9 +622,9 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin / Fin-Ack
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -647,23 +647,23 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {Ack ,Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack ,_Syn , _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
-    Direction = any,
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
+    _Direction = any,
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_listen, StateNew, 10000}.
 
 state_established(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % payload, Note: if Ack == false, SEG_ACK should be 0
+   {Ack, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % payload, Note: if Ack == false, SEG_ACK should be 0
    {{Initiator_address, Initiator_port} = Source, {Responder_address, Responder_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
-    [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:dlt(DLT), Packet),
+    [_Ether, _IP, _Hdr, Payload] = epcap_port_lib:decode(pkt:dlt(DLT), Packet),
     Direction=true,
     StateNew0 = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     case test_sequence_no_in_window(Direction , StateNew0, SEG_SEQ, PayloadLength) of
@@ -681,9 +681,9 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % payload, Note: if Ack == false, SEG_ACK should be 0
+   {Ack, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT},  % payload, Note: if Ack == false, SEG_ACK should be 0
    {{Responder_address, Responder_port} = Source, {Initiator_address, Initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -706,9 +706,9 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT},  % Syn-Ack retransmission
+   {Ack = true, Syn = true, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT},  % Syn-Ack retransmission
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -727,9 +727,9 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, Syn = true, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn-Ack retransmission
+   {Ack = true, Syn = true, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Syn-Ack retransmission
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -748,9 +748,9 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack without payload, Note: SEG_SEQ should be 0
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack without payload, Note: SEG_SEQ should be 0
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -769,9 +769,9 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack without payload, Note: SEG_SEQ should be 0
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack without payload, Note: SEG_SEQ should be 0
    {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -790,9 +790,9 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack
+   {Ack, _Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin / Fin-Ack
    {{Initiator_address, Initiator_port} = Source, {Responder_address, Responder_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -819,9 +819,9 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin / Fin-Ack 
+   {Ack, _Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin / Fin-Ack 
    {{Responder_address, Responder_port} = Source, {Initiator_address, Initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address,
       State#state.responder_port == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -848,10 +848,10 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack, _Syn, _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{Initiator_address, Initiator_port},
     {Responder_address, Responder_port}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) when 
       State#state.responder_address == Responder_address, 
       State#state.responder_port    == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -863,10 +863,10 @@ state_established(
 
 state_established(
   {packet_with_addressing,
-   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack, _Syn, _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{Responder_address, Responder_port}, 
     {Initiator_address, Initiator_port}},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) when 
       State#state.responder_address == Responder_address, 
       State#state.responder_port    == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -878,10 +878,10 @@ state_established(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack
+   {Ack = true, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack
    {{Close_responder_address, Close_responder_port} = Source, 
     {Close_initiator_address, Close_initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -907,10 +907,10 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack= true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
+   {Ack= true, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack retransmission
    {{Close_initiator_address, Close_initiator_port} = Source, 
     {Close_responder_address, Close_responder_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -936,10 +936,10 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack 
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack 
    {{Close_responder_address, Close_responder_port} = Source, 
     {Close_initiator_address, Close_initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -965,10 +965,10 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % unexpected Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % unexpected Ack
    {{Close_initiator_address, Close_initiator_port} = Source,
     {Close_responder_address, Close_responder_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -994,10 +994,10 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack=false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin, optional payload
+   {Ack=false, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin, optional payload
    {{Close_responder_address, Close_responder_port} = Source, 
     {Close_initiator_address, Close_initiator_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.fin_ack_received == true, % when Ack for Fin has been received before
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
@@ -1024,10 +1024,10 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack=false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin, optional payload
+   {Ack=false, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin, optional payload
    {{Close_responder_address, Close_responder_port} = Source, 
     {Close_initiator_address, Close_initiator_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1053,38 +1053,38 @@ state_fin_wait_1(
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack, Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst by connection close initiator
+   {_Ack, _Syn, _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst by connection close initiator
    {{Close_initiator_address, Close_initiator_port} = Source,
     {Close_responder_address, Close_responder_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    Direction = determine_Direction({Source, Destination} , State),
+    _Direction = determine_Direction({Source, Destination} , State),
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000};
 
 state_fin_wait_1(
   {packet_with_addressing,
-   {Ack , Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst by connection close responder
+   {_Ack , _Syn , _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst by connection close responder
    {{Close_responder_address, Close_responder_port} = Source, 
     {Close_initiator_address, Close_initiator_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
-    Direction = determine_Direction({Source, Destination} , State),
+    _Direction = determine_Direction({Source, Destination} , State),
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack retransmission
    {{Close_responder_address, Close_responder_port} = Source,
     {Close_initiator_address, Close_initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1108,10 +1108,10 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
+   {Ack = true, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack retransmission
    {{Close_initiator_address, Close_initiator_port} = Source,
     {Close_responder_address, Close_responder_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1135,10 +1135,10 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = false, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin, payload optional
+   {Ack = false, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin, payload optional
    {{Close_responder_address, Close_responder_port} = Source,
     {Close_initiator_address, Close_initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1162,10 +1162,10 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack, payload
+   {Ack = true, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack, payload
    {{Close_responder_address, Close_responder_port} = Source,
     {Close_initiator_address, Close_initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1189,19 +1189,19 @@ state_fin_wait_2(
 
 state_fin_wait_2(
   {packet_with_addressing,
-   { Ack, Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   { _Ack, _Syn , _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
-    Direction = any,
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
+    _Direction = any,
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_fin_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port} = Source,
     {Close_responder_address, Close_responder_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1225,19 +1225,19 @@ state_fin_fin_wait(
 
 state_fin_fin_wait(
   {packet_with_addressing,
-   {Ack , Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack , _Syn, _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
-    Direction = any,
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
+    _Direction = any,
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_finack_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port} = Source,
     {Close_responder_address, Close_responder_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1260,10 +1260,10 @@ state_fin_finack_wait(
 
 state_fin_finack_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Close_responder_address, Close_responder_port} = Source,
     {Close_initiator_address, Close_initiator_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1286,10 +1286,10 @@ state_fin_finack_wait(
 
 state_fin_finack_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission by close initiator
+   {Ack = true, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack retransmission by close initiator
     {{Close_initiator_address, Close_initiator_port} = Source, 
     {Close_responder_address, Close_responder_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1315,10 +1315,10 @@ state_fin_finack_wait(
 
 state_fin_finack_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission by close responder
+   {Ack = true, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack retransmission by close responder
    {{Close_responder_address, Close_responder_port} = Source, 
     {Close_initiator_address, Close_initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1344,19 +1344,19 @@ state_fin_finack_wait(
 
 state_fin_finack_wait(
   {packet_with_addressing,
-   {Ack , Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack , _Syn , _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
-    Direction = any,
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
+    _Direction = any,
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_fin_ack_fin_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port} = Source,
     {Close_responder_address, Close_responder_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1379,10 +1379,10 @@ state_fin_ack_fin_wait(
 
 state_fin_ack_fin_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Close_responder_address, Close_responder_port} = Source,
     {Close_initiator_address, Close_initiator_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1406,19 +1406,19 @@ state_fin_ack_fin_wait(
 
 state_fin_ack_fin_wait(
   {packet_with_addressing,
-   {Ack ,Syn , Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack ,_Syn , _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
-    Direction = any, 
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
+    _Direction = any, 
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_closing(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack
    {{Close_initiator_address, Close_initiator_port} = Source,
     {Close_responder_address, Close_responder_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1443,19 +1443,19 @@ state_closing(
 
 state_closing(
   {packet_with_addressing,
-   {Ack , Syn, Fin, Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst
+   {_Ack , _Syn, _Fin, _Rst = true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_, _}},
-   Direction = any, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
+   _Direction = any, 
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
     StateNew = State,  %#state{stack_trace_path=[{?current_function_name(),Direction , Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path]},
     {next_state, state_time_wait, StateNew, 10000}.
 
 state_time_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Ack retransmission
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Ack retransmission
    {{Close_responder_address, Close_responder_port} = Source,
     {Close_initiator_address, Close_initiator_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1479,10 +1479,10 @@ state_time_wait(
 
 state_time_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack retransmission
+   {Ack = true, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack retransmission
    {{Close_responder_address, Close_responder_port} = Source, 
     {Close_initiator_address, Close_initiator_port} = Destination}, 
-   DLT, Time, Len, Packet, PayloadLength=0}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength=0}, State) when 
       State#state.close_responder_address == Close_responder_address, 
       State#state.close_responder_port    == Close_responder_port,
       State#state.close_initiator_address == Close_initiator_address,
@@ -1506,10 +1506,10 @@ state_time_wait(
 
 state_time_wait(
   {packet_with_addressing,
-   {Ack = true, Syn = false, Fin = false, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, %Ack
+   {Ack = true, Syn = false, Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, %Ack
    {{Initiator_address, Initiator_port} = Source,
     {Responder_address, Responder_port} = Destination},
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address, 
       State#state.responder_port    == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -1533,10 +1533,10 @@ state_time_wait(
 
 state_time_wait(
   {packet_with_addressing,
-   {Ack, Syn = false, Fin = true, Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Fin-Ack / Fin retransmission
+   {Ack, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack / Fin retransmission
    {{Initiator_address, Initiator_port} = Source,
     {Responder_address, Responder_port}} = Destination,
-   DLT, Time, Len, Packet, PayloadLength}, State) when 
+   DLT, _Time, _Len, Packet, PayloadLength}, State) when 
       State#state.responder_address == Responder_address, 
       State#state.responder_port    == Responder_port,
       State#state.initiator_address == Initiator_address,
@@ -1560,9 +1560,9 @@ state_time_wait(
 
 state_time_wait(
   {packet_with_addressing,
-   {_, _, _, true, _SEG_SEQ, _SEG_ACK, _SEG_WND, OPT}, % Rst
+   {_, _, _, true, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Rst
    {{_, _},{_,_}}, 
-   DLT, Time, Len, Packet, PayloadLength}, State) ->
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
     {next_state, state_time_wait, State, 10000};
 
 state_time_wait(timeout, State) ->
@@ -1680,7 +1680,7 @@ modulo32bit(Value) when is_integer(Value)->
 add_modulo_32bit(Seqno, Offset) ->
     modulo32bit(Seqno+Offset).
 
-sequence_no_in_window(SEG_SEQ, undefined, _RCV_WND, 0) ->
+sequence_no_in_window(_SEG_SEQ, undefined, _RCV_WND, 0) ->
     true;
 
 sequence_no_in_window(SEG_SEQ, RCV_NXT, 0, 0) ->
@@ -1745,7 +1745,7 @@ smaller(SeqNoA, SeqNoB) ->  % note: false does not mean it is greater or equal, 
     smaller_or_equal(modulo32bit(SeqNoA+1), SeqNoB ).
 
 
-ack_valid(SEG_ACK, undefined, _SND_WND) ->
+ack_valid(_SEG_ACK, undefined, _SND_WND) ->
     valid_ack;
 
 ack_valid(SEG_ACK, SND_UNA, SND_WND) ->
@@ -1890,10 +1890,10 @@ storeState_SND_WND(true = _Direction, State, SEG_WND) ->
 storeState_SND_WND(false = _Direction, State, SEG_WND) ->		
     State#state{responder_RCV_WND = SEG_WND}.
 
-storeState_Payload(Direction=true, State, SEG_SEQ, 0 =_PayloadLength, <<>> = Payload) ->
+storeState_Payload(_Direction=true, State, _SEG_SEQ, 0 =_PayloadLength, <<>> = _Payload) ->
     State; %% ignore zero payload length packages
 
-storeState_Payload(Direction=false, State, SEG_SEQ, 0 =_PayloadLength, <<>> = Payload) ->
+storeState_Payload(_Direction=false, State, _SEG_SEQ, 0 =_PayloadLength, <<>> = _Payload) ->
     State; %% ignore zero payload length packages
 
 storeState_Payload(Direction=true, State, SEG_SEQ, PayloadLength, Payload) ->
@@ -1935,7 +1935,7 @@ log_initiator_responder(StateName, SEG_SEQ, SEG_ACK, SEG_WND, State) ->
     error_logger:warning_report("r_address: ~p, r_port : ~w, r_RCV_WND ~w, r_SND_UNA: ~w, r_RCV_NXT: ~w~n", [State#state.responder_address, State#state.responder_port, State#state.responder_RCV_WND, 	State#state.responder_SND_UNA, State#state.responder_RCV_NXT]),
     true.
 
-forward_payload([ServerPid|ServerPids], {Source_address, Source_port} = Source,{Destination_address, Destination_port} = Destination, Payload) ->
+forward_payload([ServerPid|ServerPids], {Source_address, Source_port} = _Source,{Destination_address, Destination_port} = _Destination, Payload) ->
     error_logger:warning_report("Sending data: ServerPid: ~p, Source: ~p:~p, Destination: ~p:~p, PayloadLength ~p~n", [ServerPid, Source_address, Source_port, Destination_address, Destination_port, byte_size(Payload)]),
     ok= gen_server:call(ServerPid, {payload_section, Source_address, Source_port, Destination_address, Destination_port, Payload}, infinity),
     forward_payload(ServerPids, {Source_address, Source_port}, {Destination_address, Destination_port}, Payload);
@@ -1973,19 +1973,19 @@ forward_defrag_ack_payload_store(_Direction=false, false = _Fin, _Source, _Desti
     State.
 
 
-checkPayloadReceptionBuffer(Direction=true, false = _Ack, SEG_ACK, _Syn_or_Fin, #state{} = State) ->
+checkPayloadReceptionBuffer(Direction=true, false = _Ack, _SEG_ACK, _Syn_or_Fin, #state{} = State) ->
     error_logger:warning_report("Received: Package with Ack = false in Direction ~p~n", [Direction]), 
     State;
 
-checkPayloadReceptionBuffer(Direction=false, false = _Ack, SEG_ACK, _Syn_or_Fin, #state{} = State) ->
+checkPayloadReceptionBuffer(Direction=false, false = _Ack, _SEG_ACK, _Syn_or_Fin, #state{} = State) ->
     error_logger:warning_report("Received: Package with Ack = false in Direction ~p~n", [Direction]), 
     State;
 
-checkPayloadReceptionBuffer(Direction=true, Ack, SEG_ACK, _Syn_or_Fin, #state{initiator_payload_store = []} = State) ->
+checkPayloadReceptionBuffer(Direction=true, _Ack, _SEG_ACK, _Syn_or_Fin, #state{initiator_payload_store = []} = State) ->
     error_logger:warning_report("Check payload_store: Payloadstore in Direction ~p is empty~n", [Direction]), 
     State;
 
-checkPayloadReceptionBuffer(Direction=false, Ack, SEG_ACK, _Syn_or_Fin, #state{responder_payload_store = []} = State) ->
+checkPayloadReceptionBuffer(Direction=false, _Ack, _SEG_ACK, _Syn_or_Fin, #state{responder_payload_store = []} = State) ->
     error_logger:warning_report("Check payload_store: Payloadstore in Direction ~p is empty~n", [Direction]),
     State;
 
@@ -1996,7 +1996,7 @@ checkPayloadReceptionBuffer(Direction=true, Ack, SEG_ACK, Syn_or_Fin, #state{ini
     %% test SEG_SEQ32 =< RCV_NXT32 =< SEG_ACK
     case smaller_or_equal(SEG_SEQ32, RCV_NXT32) of
 	true ->
-		case smaller_or_equal(RCV_NXT32, SEG_ACK) of 
+		case smaller_or_equal(RCV_NXT32, SEG_ACK32) of 
 			true ->
 			    case (Ack == true) of
 				true ->
@@ -2009,7 +2009,7 @@ checkPayloadReceptionBuffer(Direction=true, Ack, SEG_ACK, Syn_or_Fin, #state{ini
 					    StateNew1 = State#state{initiator_ack_payload_store = <<Ack_payload_store/binary, Payload_non_duplicate/binary>>},
 					    StateNew2 = storeState_RCV_NXT(Direction, StateNew1, SEG_SEQ, PayloadLength-Delta_overlap_ignore, Syn_or_Fin),
 		        		    StateNew  = StateNew2#state{initiator_payload_store = PayloadFrames},
-					    checkPayloadReceptionBuffer(Direction, Ack, SEG_ACK, Syn_or_Fin, StateNew);
+					    checkPayloadReceptionBuffer(Direction, Ack, SEG_ACK32, Syn_or_Fin, StateNew);
 					false ->
 		        		    error_logger:warning_report("Check payload failed as no new data available!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p, PayloadLength: ~p~n",[Direction, SEG_SEQ, RCV_NXT, PayloadLength]),
 					    State#state{initiator_payload_store = PayloadFrames}	    
@@ -2035,7 +2035,7 @@ checkPayloadReceptionBuffer(Direction=false, Ack, SEG_ACK, Syn_or_Fin, #state{re
     %% test SEG_SEQ32 =< RCV_NXT32 =< SEG_ACK
     case smaller_or_equal(SEG_SEQ32, RCV_NXT32) of
 	true ->
-		case smaller_or_equal(RCV_NXT32, SEG_ACK) of 
+		case smaller_or_equal(RCV_NXT32, SEG_ACK32) of 
 			true ->
 			    case (Ack == true) of
 				true ->
@@ -2048,7 +2048,7 @@ checkPayloadReceptionBuffer(Direction=false, Ack, SEG_ACK, Syn_or_Fin, #state{re
 					    StateNew1 = State#state{responder_ack_payload_store = <<Ack_payload_store/binary, Payload_non_duplicate/binary>>},
 					    StateNew2 = storeState_RCV_NXT(Direction, StateNew1, SEG_SEQ, PayloadLength-Delta_overlap_ignore, Syn_or_Fin),
 		        		    StateNew  = StateNew2#state{responder_payload_store = PayloadFrames},
-					    checkPayloadReceptionBuffer(Direction, Ack, SEG_ACK, Syn_or_Fin, StateNew);
+					    checkPayloadReceptionBuffer(Direction, Ack, SEG_ACK32, Syn_or_Fin, StateNew);
 					false ->
 		        		    error_logger:warning_report("Check payload failed as no new data available!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p, PayloadLength: ~p~n",[Direction, SEG_SEQ, RCV_NXT, PayloadLength]),
 					    State#state{responder_payload_store = PayloadFrames}	    
@@ -2073,20 +2073,20 @@ storeState_SACK_PERMITTED(_Direction=true, State) ->
 storeState_SACK_PERMITTED(_Direction=false, State) ->
         State#state{responder_sack_permitted = true}.
 
-does_connection_support_SACK(State) ->
-	does_connection_support_SACK(State#state.initiator_sack_permitted, State#state.responder_sack_permitted).
+%% does_connection_support_SACK(State) ->
+%% 	does_connection_support_SACK(State#state.initiator_sack_permitted, State#state.responder_sack_permitted).
 
-does_connection_support_SACK(undefined, undefined) ->
-        false;
+%% does_connection_support_SACK(undefined, undefined) ->
+%%         false;
 
-does_connection_support_SACK(true, undefined) ->
-        false;
+%% does_connection_support_SACK(true, undefined) ->
+%%         false;
 
-does_connection_support_SACK(undefined, true) ->
-        false;
+%% does_connection_support_SACK(undefined, true) ->
+%%         false;
 
-does_connection_support_SACK(true, true) ->
-        true.
+%% does_connection_support_SACK(true, true) ->
+%%         true.
 
 determine_Direction({{_Source_address, _Source_port} = Source,{_Destination_address, _Destination_port} = Destination}, State) ->
      Initiator_address = State#state.initiator_address,
