@@ -242,8 +242,7 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 				    [0,0] ->
 					true;
 				    [_,_] ->
-                                        #ipv4{saddr = S, daddr = D, p = P}, 
-					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [S,D,P, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
+					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
 					false
 				end;
 			    #ipv6{} ->
@@ -299,8 +298,7 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 				    [0,0] ->
 					true;
                                     [_,_] ->
-                                        #ipv4{saddr = S, daddr = D, p = P}, 
-					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [S,D,P, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
+					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
 					false
 				end;
 			    #ipv6{} ->
@@ -395,14 +393,14 @@ payloadsize(#ipv4{len = Len, hl = HL}, #tcp{off = Off}) ->
     Len - (HL * 4) - (Off * 4);
 
 						% jumbo packet
-payloadsize(#ipv6{len = 0, next = Next}, #tcp{off = Off}) ->
+payloadsize(#ipv6{len = 0, next = _Next}, #tcp{off = _Off}) ->
 						% XXX handle jumbo packet here
     io:format("Warning!!! Jumbo packet!!!"),
     0;
 payloadsize(#ipv6{len = Len, next = ?IPPROTO_TCP}, #tcp{off = Off}) ->
     Len - (Off * 4);
 						% additional extension headeres
-payloadsize(#ipv6{len = Len, next = Next}, #tcp{off = Off}) ->
+payloadsize(#ipv6{len = _Len, next = _Next}, #tcp{off = Off}) ->
 						% XXX handle extension headers here
     io:format("Warning!!! Extension packet!!!"),
     0.
