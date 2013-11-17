@@ -43,6 +43,7 @@
 -define(SERVER, ?MODULE). 
 
 -record(state, {
+          crash::boolean(),
 	  child_worker_instance::integer(),
 	  child_worker_pid_list::[tuple()],
           connection_worker_instance::integer(),
@@ -108,7 +109,7 @@ remove_connection_worker_by_pid(Pid) ->
 %%--------------------------------------------------------------------
 init([]) ->
     io:format("Defrag_server started\n"),
-    {ok, #state{connection_worker_instance = 0, child_worker_instance = 0, connection_worker_pid_list = [], child_worker_pid_list = []}}.
+    {ok, #state{connection_worker_instance = 0, child_worker_instance = 0, connection_worker_pid_list = [], child_worker_pid_list = [], crash = true}}.
 
 
 %%--------------------------------------------------------------------
@@ -204,8 +205,9 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({packet, DLT, Time, Len, Packet}, State) ->
-    [_Ether, IP, Hdr, _Payload] = epcap_port_lib:decode(pkt:dlt(DLT), Packet),
+handle_info({packet, DLT, Time, Len, Data}, State) ->
+    Packet = epcap_port_lib:decode(DLT, Data, State#state.crash),
+    [_EtherIgnore, IP, TCP, PayloadPadded] = Packet,
     {Saddr, Daddr, _Proto} = case IP of
 				 #ipv4{saddr = S, daddr = D, p = P} ->
 				     {S,D,P};
@@ -213,25 +215,34 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 				 #ipv6{saddr = S, daddr = D, next = P} ->
 				     {S,D,P}
 			     end,
-    Source_address = inet_parse:ntoa(Saddr),
-    Source_port = epcap_port_lib:port(sport, Hdr),
-    Destination_address = inet_parse:ntoa(Daddr),
-    Destination_port = epcap_port_lib:port(dport, Hdr),
+    Source_address = Saddr,
+    %Source_address = inet_parse:ntoa(Saddr),
+    %%Source_port = epcap_port_lib:port(sport, TCP),
+    %Destination_address = inet_parse:ntoa(Daddr),
+    Destination_address = Daddr,
+    %%Destination_port = epcap_port_lib:port(dport, TCP),
+    #tcp{sport = Sport, dport = Dport, ackno = Ackno, seqno = Seqno,
+         win = Win, cwr = _CWR, ece = _ECE, urg = _URG, ack = ACK, psh = _PSH,
+         rst = RST, syn = SYN, fin = FIN, opt = OptBinary} = TCP, 
+    Ack = (ACK =:=1),
+    Rst = (RST =:=1),
+    Syn = (SYN =:=1),
+    Fin = (FIN =:=1),
+    Opt = pkt_tcp:options(OptBinary),
     case get_connection_worker_pid_by_address_tuple(State#state.connection_worker_pid_list, 
-						    {{Source_address, Source_port},{Destination_address, Destination_port}}) of
-	{not_found, _AddressTuple} -> 
-	    Header = epcap_port_lib:header(Hdr),
-	    {flags, Flags} = lists:keyfind(flags, 1, Header),
-	    Syn = lists:member(syn, Flags),
-	    Ack = lists:member(ack, Flags),
-	    Fin = lists:member(fin, Flags),
-	    Rst = lists:member(rst, Flags),
-            {seq, Seqno} = lists:keyfind(seq, 1, Header),
-            {ack, Ackno} = lists:keyfind(ack, 1, Header),
-            {win, Win} = lists:keyfind(win, 1, Header),
-            {opt, OptBinary} = lists:keyfind(opt, 1, Header),
-            Opt = pkt_tcp:options(OptBinary),
-	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:dlt(DLT), Packet}),
+						    {{Source_address, Sport},{Destination_address, Dport}}) of
+	{not_found, _AddressTuple} ->
+	    %%Header = epcap_port_lib:header(TCP),
+	    %%{flags, Flags} = lists:keyfind(flags, 1, Header),
+	    %%Syn = lists:member(syn, Flags),
+	    %%Ack = lists:member(ack, Flags),
+	    %%Fin = lists:member(fin, Flags),
+	    %%Rst = lists:member(rst, Flags),
+            %%{seq, Seqno} = lists:keyfind(seq, 1, Header),
+            %%{ack, Ackno} = lists:keyfind(ack, 1, Header),
+            %%{win, Win} = lists:keyfind(win, 1, Header),
+            %%{opt, OptBinary} = lists:keyfind(opt, 1, Header),
+            %%Opt = tcp_options(OptBinary),
             PayloadSize = payloadsize(IP, TCP),
             Payload = <<PayloadPadded:PayloadSize/binary>>,
 	    Chksum_ok = case IP of
@@ -256,10 +267,10 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 			    {ok, ConnectionWorkerPid} = defrag_root_sup:start_worker(
 							  StateNew1#state.connection_worker_instance, 
 							  {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-							   {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
+							   {{Source_address, Sport}, {Destination_address, Dport}}, 
 							   DLT, Time, Len, Packet, PayloadSize=0}, 
 							  StateNew1#state.child_worker_pid_list), 
-			    AddressTuple = {{Source_address, Source_port}, {Destination_address, Destination_port}},
+			    AddressTuple = {{Source_address, Sport}, {Destination_address, Dport}},
 			    StateNew = StateNew1#state{connection_worker_pid_list = 
 							   insert_element(StateNew1#state.connection_worker_pid_list, {AddressTuple, ConnectionWorkerPid})};
 			_Other -> 
@@ -272,18 +283,17 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 	    end;
 
 	{found, WorkerPid, _Any} ->
-	    Header = epcap_port_lib:header(Hdr),
-	    {flags, Flags} = lists:keyfind(flags, 1, Header),
-	    Syn = lists:member(syn, Flags),
-	    Ack = lists:member(ack, Flags),
-	    Fin = lists:member(fin, Flags),
-	    Rst = lists:member(rst, Flags),
-            {seq, Seqno} = lists:keyfind(seq, 1, Header),
-            {ack, Ackno} = lists:keyfind(ack, 1, Header),
-            {win, Win} = lists:keyfind(win, 1, Header),
-            {opt, OptBinary} = lists:keyfind(opt, 1, Header),
-            Opt = pkt_tcp:options(OptBinary),
-	    [_EtherIgnore, IP, TCP, PayloadPadded] = pkt:decapsulate({pkt:dlt(DLT), Packet}),
+	    %%Header = epcap_port_lib:header(TCP),
+	    %%{flags, Flags} = lists:keyfind(flags, 1, Header),
+	    %%Syn = lists:member(syn, Flags),
+	    %%Ack = lists:member(ack, Flags),
+	    %%Fin = lists:member(fin, Flags),
+	    %%Rst = lists:member(rst, Flags),
+            %%{seq, Seqno} = lists:keyfind(seq, 1, Header),
+            %%{ack, Ackno} = lists:keyfind(ack, 1, Header),
+            %%{win, Win} = lists:keyfind(win, 1, Header),
+            %%{opt, OptBinary} = lists:keyfind(opt, 1, Header),
+            %%Opt = pkt_tcp:options(OptBinary),
 	    PayloadSize = payloadsize(IP, TCP),
 	    Payload = <<PayloadPadded:PayloadSize/binary>>,
 	    %% io:format("WorkerPid: ~p, packet ~p~n", [WorkerPid, 
@@ -308,7 +318,7 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
                 true -> 
 		    defrag_worker:send_packet(WorkerPid, 
 					      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-					       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
+					       {{Source_address, Sport}, {Destination_address, Dport}}, 
 					       DLT, Time, Len, Packet, PayloadSize});
 		false ->
 		    ok % ignore packet as checksum is not ok			
@@ -392,15 +402,19 @@ get_connection_worker_pid_by_address_tuple(
 payloadsize(#ipv4{len = Len, hl = HL}, #tcp{off = Off}) ->
     Len - (HL * 4) - (Off * 4);
 
-						% jumbo packet
+%% jumbo packet
 payloadsize(#ipv6{len = 0, next = _Next}, #tcp{off = _Off}) ->
 						% XXX handle jumbo packet here
     io:format("Warning!!! Jumbo packet!!!"),
     0;
 payloadsize(#ipv6{len = Len, next = ?IPPROTO_TCP}, #tcp{off = Off}) ->
     Len - (Off * 4);
-						% additional extension headeres
-payloadsize(#ipv6{len = _Len, next = _Next}, #tcp{off = Off}) ->
-						% XXX handle extension headers here
+
+
+%% additional extension headeres
+payloadsize(#ipv6{len = _Len, next = _Next}, #tcp{off = _Off}) ->
+%% XXX handle extension headers here
     io:format("Warning!!! Extension packet!!!"),
     0.
+
+
