@@ -153,7 +153,7 @@ handle_call({payload_section, Saddr, Sport, Daddr, Dport, Payload}, _From, State
 
 				      {protocol, Proto},
 				      {payload_bytes, byte_size(Payload)},
-				      {payload, epcap_port_lib:payload(Payload)}
+				      {payload, epcap_port_lib:to_ascii(Payload)}
 				     ])
     end,
     Reply = ok,
