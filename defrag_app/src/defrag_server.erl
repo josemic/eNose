@@ -64,10 +64,10 @@ start_link() ->
     gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
 start_worker(AddressTuple, PacketTuple) ->
-    gen_server:call(?MODULE, {start_worker, AddressTuple, PacketTuple}).
+    gen_server:call(?MODULE, {start_worker, AddressTuple, PacketTuple}, infinity).
 
 stop_worker(WorkerPid) ->
-    gen_server:call(?MODULE, {stop_worker, WorkerPid}).
+    gen_server:call(?MODULE, {stop_worker, WorkerPid}, infinity).
 
 rule_element_register(_RuleOptionList, ChildWorkerPid, _RuleElements)->
     register_child_worker_Pid(ChildWorkerPid),
@@ -78,10 +78,10 @@ rule_element_unregister(_WorkerPid, ChildWorkerPid, _RuleOptionList)->
     ok.
 
 register_child_worker_Pid(ChildWorkerPid) ->
-    gen_server:call(?MODULE, {register_child_worker_Pid,  ChildWorkerPid}).
+    gen_server:call(?MODULE, {register_child_worker_Pid,  ChildWorkerPid}, infinity).
 
 unregister_child_worker_Pid(ChildWorkerPid) ->
-    gen_server:call(?MODULE, {unregister_child_worker_Pid,  ChildWorkerPid}).
+    gen_server:call(?MODULE, {unregister_child_worker_Pid,  ChildWorkerPid}, infinity).
 
 %%register_connection_worker_Pid(ConnectionWorkerPid) ->
 %%    gen_server:call(?MODULE, {register_connection_worker_Pid,  ConnectionWorkerPid}).
@@ -253,7 +253,7 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 				    [0,0] ->
 					true;
 				    [_,_] ->
-					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
+					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
 					false
 				end;
 			    #ipv6{} ->
@@ -308,7 +308,7 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 				    [0,0] ->
 					true;
                                     [_,_] ->
-					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Packet:~p~nDecoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Packet, pkt:decapsulate({pkt:dlt(DLT), Packet})]),
+					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
 					false
 				end;
 			    #ipv6{} ->
