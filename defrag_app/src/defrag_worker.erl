@@ -80,12 +80,12 @@
 -define(DebugBuffer(List), []).
 -endif.
 
-
-
 -define(current_function_name(),
 	element(2, element(2, process_info(self(), current_function)))).
 
 -record(state, {
+	  sent_packets::integer(),
+	  sent_bytes::integer(),
 	  child_worker_list :: [pid()],
 	  instance::integer(),
           address_tuple::[tuple],
@@ -142,8 +142,8 @@ start_link(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, SEG_SEQ, SEG_
 	lists:flatten(io_lib:format("~p", [Responder_address])) ++ ":" ++
 	lists:flatten(io_lib:format("~p", [Responder_port])),
     Name = list_to_atom (Name_s),
-						% error_logger:info_msg("gen_server:start_link(~p)~n",[[{local, Name},?MODULE,[],[],self()]]),
-    %%Dbg_fun = fun(FuncState, Event, ProcState) -> % error_logger:warning_msg("~nDebugFun:~n-FuncState:~p~n-Event:~p~n-ProcState:~p~n", [FuncState, Event, ProcState]) end,
+    %%error_logger:info_msg("gen_server:start_link(~p)~n",[[{local, Name},?MODULE,[],[],self()]]),
+    %%Dbg_fun = fun(FuncState, Event, ProcState) -> %%error_logger:warning_msg("~nDebugFun:~n-FuncState:~p~n-Event:~p~n-ProcState:~p~n", [FuncState, Event, ProcState]) end,
     gen_fsm:start_link({local,Name},?MODULE,[Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT},
 							AddressTuple, _DLT, Time, Len, Packet, PayloadLength=0}, ChildWorkerList],[?GEN_FSM_OPTS]).
 
@@ -151,7 +151,7 @@ stop(WorkerPid) ->
     gen_server:call(WorkerPid, stop_worker).
 
 send_packet(WorkerPid, Message) ->
-    gen_fsm:send_event(WorkerPid, Message).
+    ok = gen_fsm:send_event(WorkerPid, Message).
 
 
 %% This implements the statemachine given in:
@@ -180,6 +180,8 @@ init([Instance,{packet_with_addressing, {Ack = false, _Syn = true, _Fin = false,
 		_DLT, _Time, _Len, _Packet, _PayloadLength=0}, ChildWorkerList]) ->
     {{Initiator_address, Initiator_port},{Responder_address, Responder_port}} = AddressTuple,
     State = #state{
+               sent_packets =0,
+               sent_bytes = 0,
 	       instance = Instance,
 	       address_tuple = AddressTuple,
 	       initiator_address = Initiator_address,
@@ -202,7 +204,7 @@ init([Instance,{packet_with_addressing, {Ack = false, _Syn = true, _Fin = false,
                initiator_syn_seg_seq_stack=stack_new(?MaxNumberOfSynSegSeqOnStack)
 	      },
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
     StateNew1 = storeState_SND_UNA(Direction, StateNew0, SEG_ACK, Ack),
     StateNew2 = storeState_SND_WND(Direction, StateNew1, SEG_WND),
     case lists:keyfind(window_scale, 1, OPT) of
@@ -242,7 +244,7 @@ init([Instance,{packet_with_addressing, {Ack = false, _Syn = true, _Fin = false,
 %%		_DLT, Time, Len, Packet, PayloadLength=0}),
 state_listen( % this state ocurrs only after reset
   {packet_with_addressing,
-   {Ack = false, _Syn = true, _Fin = false, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn after Rst
+   {Ack = false, _Syn = true, _Fin = false, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Syn after Rst
    {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}},
    _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when
       State#state.responder_address == Responder_address,
@@ -251,7 +253,7 @@ state_listen( % this state ocurrs only after reset
       State#state.initiator_port == Initiator_port ->
     %% Rst should be ignored // RFC 793, p65
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
     StateNew1 = storeState_SND_UNA(Direction, StateNew0, SEG_ACK, Ack),
     StateNew2 = storeState_SND_WND(Direction, StateNew1, SEG_WND),
     case lists:keyfind(window_scale, 1, OPT) of
@@ -272,16 +274,32 @@ state_listen( % this state ocurrs only after reset
 
 state_listen(
   {packet_with_addressing,
+   {_Ack, _Syn, _Fin, _Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, OPT}, % Rst in state_listen, see RFC 793, p. 37
+   {{Responder_address, Responder_port}, {Initiator_address, Initiator_port}},
+   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) when
+      State#state.responder_address == Responder_address,
+      State#state.responder_port == Responder_port,
+      State#state.initiator_address == Initiator_address,
+      State#state.initiator_port == Initiator_port ->
+    %% Rst should be ignored // RFC 793, p65
+    Direction=false,
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
+    StateNew = StateNew0#state{initiator_syn_seg_seq_stack = stack_element(SEG_SEQ, stack_new(?MaxNumberOfSynSegSeqOnStack))}, % clear stack due to reset!!
+    NextStateName = state_listen,
+    {next_state, NextStateName, StateNew};
+
+state_listen(
+  {packet_with_addressing,
    {_Ack= true, _Syn, _Fin, _Rst = false, _SEG_SEQ, _SEG_ACK, _SEG_WND, _OPT}, % Ack
    {{_, _},{_,_}},
-   _DLT, _Time, _Len, _Packet, _PayloadLength=0}, State) ->
+   _DLT, _Time, _Len, _Packet, _PayloadLength}, State) ->
     _Direction = any,
-    StateNew = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), _Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), _Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     %% ignore all Ack packages // RCF 793 p. 65
     {next_state, state_listen, StateNew};
 
 state_listen(timeout, State) ->
-						% error_logger:warning_msg("Closing Instance: ~p~n in state listen", [State#state.instance]),
+    %%error_logger:warning_msg("Closing Instance: ~p~n in state listen", [State#state.instance]),
     {stop, shutdown, State}.
 
 state_syn_sent(
@@ -295,7 +313,7 @@ state_syn_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0, SEG_SEQ, Syn or Fin),
@@ -330,7 +348,7 @@ state_syn_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case stack_member(add_modulo_32bit(SEG_ACK, -1), StateNew0#state.initiator_syn_seg_seq_stack) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(not(Direction), StateNew0, add_modulo_32bit(SEG_ACK, -1), _Syn = true), % initialize initiator
@@ -355,7 +373,7 @@ state_syn_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
     StateNew1 = storeState_SND_UNA(Direction, StateNew0, SEG_ACK, Ack),
     StateNew2 = storeState_SND_WND(Direction, StateNew1, SEG_WND),
     case lists:keyfind(window_scale, 1, OPT) of
@@ -384,7 +402,7 @@ state_syn_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, lists:keyfind(window_scale, 1, OPT)}|State#state.stack_trace_path])},
     case stack_member(add_modulo_32bit(SEG_ACK, -1), StateNew0#state.initiator_syn_seg_seq_stack) of
 	true ->
             StateNew1 = storeState_RCV_NXT(not(Direction), StateNew0, add_modulo_32bit(SEG_ACK, -1), _Syn = true), % initialize initiator
@@ -420,7 +438,7 @@ state_syn_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     Close_Direction = true,
     StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0),
     StateNew2 = storeState_RCV_NXT(Close_Direction, StateNew1, SEG_SEQ, Syn or Fin),
@@ -440,13 +458,13 @@ state_syn_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_listen;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_syn_sent,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -464,13 +482,13 @@ state_syn_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_listen;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_syn_sent,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -487,7 +505,7 @@ state_syn_syn_ack_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
@@ -510,7 +528,7 @@ state_syn_syn_ack_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, Syn or Fin),% as pure ACK received, sequence number is not increased
@@ -533,7 +551,7 @@ state_syn_syn_ack_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     Close_Direction = close_initiator,
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
@@ -558,7 +576,7 @@ state_syn_syn_ack_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     Close_Direction = close_initiator,
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
@@ -585,13 +603,13 @@ state_syn_syn_ack_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_listen;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_syn_syn_ack_sent,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -609,13 +627,13 @@ state_syn_syn_ack_sent(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_listen;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_syn_syn_ack_sent,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -632,7 +650,7 @@ state_syn_received(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, Syn or Fin),% as pure ACK received, sequence number is not increased
@@ -655,7 +673,7 @@ state_syn_received(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     Close_Direction = close_initiator,
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
@@ -680,7 +698,7 @@ state_syn_received(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     Close_Direction = close_initiator,
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
@@ -697,7 +715,7 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {_Ack, _Syn, _Fin, _Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Rst
+   {_Ack, _Syn, _Fin, _Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Rst as connection initiator received. 
    {{Initiator_address, Initiator_port},
     {Responder_address, Responder_port}},
    _DLT, _Time, _Len, _Packet, PayloadLength}, State) when
@@ -706,13 +724,13 @@ state_syn_received(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
-	    NextStateName = state_listen;
+	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_syn_received,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -721,7 +739,7 @@ state_syn_received(
 
 state_syn_received(
   {packet_with_addressing,
-   {_Ack, _Syn, _Fin, _Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Rst
+   {_Ack, _Syn, _Fin, _Rst = true, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Rst as connection responder received, see RFC 793, p. 37. Go back to listen.
    {{Responder_address, Responder_port},
     {Initiator_address, Initiator_port}},
    _DLT, _Time, _Len, _Packet, PayloadLength}, State) when
@@ -730,13 +748,13 @@ state_syn_received(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_listen;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_syn_received,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -754,7 +772,7 @@ state_established(
       State#state.initiator_port == Initiator_port ->
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
 	    StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -763,7 +781,7 @@ state_established(
 	    StateNew4  = storeState_SND_WND(Direction, StateNew3, SEG_WND),
 	    StateNew   = forward_defrag_ack_payload_store(Direction, Fin, Source, Destination, StateNew4);
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State
     end,
     {next_state, state_established, StateNew};
@@ -779,7 +797,7 @@ state_established(
       State#state.initiator_port == Initiator_port ->
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
     Direction=false,
-    StateNew0 =State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 =State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
 	    StateNew1 = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -788,7 +806,7 @@ state_established(
 	    StateNew4  = storeState_SND_WND(Direction, StateNew3, SEG_WND),
 	    StateNew   = forward_defrag_ack_payload_store(Direction, Fin, Source, Destination, StateNew4);
 	false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
 	    StateNew = State
     end,
     {next_state, state_established, StateNew};
@@ -803,7 +821,7 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0, SEG_SEQ, Syn or Fin),
@@ -824,7 +842,7 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0, SEG_SEQ, Syn or Fin),
@@ -845,7 +863,7 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
@@ -866,7 +884,7 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
 	    StateNew1 = storeState_RCV_NXT(Direction, StateNew0,     SEG_SEQ, Syn or Fin), % as pure ACK received, sequence number is not increased
@@ -887,7 +905,7 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
@@ -899,7 +917,7 @@ state_established(
 	    StateNew   = forward_defrag_ack_payload_store(Direction, Fin, Source, Destination, StateNew4),
 	    NextStateName = state_fin_wait_1;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.initiator_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = State,
             NextStateName = state_established,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -917,7 +935,7 @@ state_established(
       State#state.initiator_port == Initiator_port ->
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, _Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew1 = copy_state_to_close_initiator_close_responder(Direction, StateNew0),
@@ -928,7 +946,7 @@ state_established(
 	    StateNew   = forward_defrag_ack_payload_store(Direction, Fin, Source, Destination, StateNew4),
 	    NextStateName = state_fin_wait_1;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = State,
             NextStateName = state_established,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -946,13 +964,13 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = copy_state_to_close_initiator_close_responder(Direction, StateNew0),
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_established,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -970,13 +988,13 @@ state_established(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = copy_state_to_close_initiator_close_responder(Direction, StateNew0),
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_established,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -995,7 +1013,7 @@ state_fin_wait_1(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1024,7 +1042,7 @@ state_fin_wait_1(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1053,7 +1071,7 @@ state_fin_wait_1(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1082,7 +1100,7 @@ state_fin_wait_1(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1112,7 +1130,7 @@ state_fin_wait_1(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1141,7 +1159,7 @@ state_fin_wait_1(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1169,13 +1187,37 @@ state_fin_wait_1(
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            StateNew = StateNew0,
+            NextStateName = state_fin_wait_1,
+            log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
+    end,
+    {next_state, NextStateName, StateNew, 10000};
+
+state_fin_wait_1(
+  {packet_with_addressing,
+   {_Ack = true, _Syn = true, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Syn-Ack repeatition by connection initiator, connection responder had responded with FIN
+   {{Close_responder_address, Close_responder_port} = Source},
+    {Close_initiator_address, Close_initiator_port} = Destination,
+   _DLT, _Time, _Len, _Packet, PayloadLength}, State) when
+      State#state.close_responder_address == Close_responder_address,
+      State#state.close_responder_port    == Close_responder_port,
+      State#state.close_initiator_address == Close_initiator_address,
+      State#state.close_initiator_port    == Close_initiator_port ->
+    Direction = determine_Direction({Source, Destination} , State),
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
+	true ->
+            StateNew = StateNew0,
+	    NextStateName = state_fin_wait_1;
+        false ->
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_wait_1,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1193,13 +1235,13 @@ state_fin_wait_1(
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_wait_1,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1218,7 +1260,7 @@ state_fin_wait_2(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1245,7 +1287,7 @@ state_fin_wait_2(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1272,7 +1314,7 @@ state_fin_wait_2(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1299,7 +1341,7 @@ state_fin_wait_2(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1326,7 +1368,7 @@ state_fin_wait_2(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1352,13 +1394,13 @@ state_fin_wait_2(
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_wait_2,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1376,13 +1418,13 @@ state_fin_wait_2(
       State#state.close_initiator_address == Close_initiator_address,
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_wait_2,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1401,7 +1443,7 @@ state_fin_fin_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1427,13 +1469,13 @@ state_fin_fin_wait(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_fin_wait,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1451,13 +1493,13 @@ state_fin_fin_wait(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_fin_wait,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1476,7 +1518,7 @@ state_fin_finack_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1502,7 +1544,7 @@ state_fin_finack_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1528,7 +1570,7 @@ state_fin_finack_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1557,7 +1599,7 @@ state_fin_finack_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1585,13 +1627,13 @@ state_fin_finack_wait(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_finack_wait,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1609,13 +1651,13 @@ state_fin_finack_wait(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+            %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_finack_wait,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1634,7 +1676,7 @@ state_fin_ack_fin_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1660,7 +1702,7 @@ state_fin_ack_fin_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1686,13 +1728,13 @@ state_fin_ack_fin_wait(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_ack_fin_wait,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1710,13 +1752,13 @@ state_fin_ack_fin_wait(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_fin_ack_fin_wait,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1735,7 +1777,7 @@ state_closing(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1762,13 +1804,13 @@ state_closing(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=true,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_closing,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1786,13 +1828,13 @@ state_closing(
       State#state.initiator_address == Initiator_address,
       State#state.initiator_port    == Initiator_port ->
     Direction=false,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, _SEG_SEQ, _SEG_ACK, _SEG_WND, _PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, _Ack, _Syn, _Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ, PayloadLength) of
 	true ->
             StateNew = StateNew0,
 	    NextStateName = state_time_wait;
         false ->
-						% error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
+	    %%error_logger:warning_msg("Warning!!!!Direction:~w, SEG_SEQ: ~w, PayloadLength ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, SEG_SEQ, PayloadLength, State#state.responder_RCV_NXT, calculate_window(Direction, State)]),
             StateNew = StateNew0,
             NextStateName = state_closing,
             log_initiator_responder(NextStateName, SEG_SEQ, SEG_ACK, SEG_WND, StateNew)
@@ -1811,7 +1853,7 @@ state_time_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1838,7 +1880,7 @@ state_time_wait(
       State#state.close_initiator_port    == Close_initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1865,7 +1907,7 @@ state_time_wait(
       State#state.initiator_port    == Initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1884,7 +1926,7 @@ state_time_wait(
   {packet_with_addressing,
    {Ack, Syn = false, Fin = true, _Rst = false, SEG_SEQ, SEG_ACK, SEG_WND, _OPT}, % Fin-Ack / Fin retransmission
    {{Initiator_address, Initiator_port} = Source,
-    {Responder_address, Responder_port}} = Destination,
+    {Responder_address, Responder_port} = Destination},
    _DLT, _Time, _Len, Packet, PayloadLength}, State) when
       State#state.responder_address == Responder_address,
       State#state.responder_port    == Responder_port,
@@ -1892,7 +1934,7 @@ state_time_wait(
       State#state.initiator_port    == Initiator_port ->
     Direction = determine_Direction({Source, Destination} , State),
     [_EtherIgnore, _IP, _TCP, Payload] = Packet,
-    StateNew0 = State, %#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
+    StateNew0 = State#state{stack_trace_path= ?DebugBuffer([{?current_function_name(), Direction, Ack, Syn, Fin, _Rst, SEG_SEQ, SEG_ACK, SEG_WND, PayloadLength}|State#state.stack_trace_path])},
     case test_sequence_no_in_window(Direction, StateNew0, SEG_SEQ) of
 	true ->
             StateNew1  = storeState_Payload(Direction, StateNew0, SEG_SEQ, PayloadLength, <<Payload:PayloadLength/binary>>),
@@ -1915,7 +1957,7 @@ state_time_wait(
     {next_state, state_time_wait, State, 10000};
 
 state_time_wait(timeout, State) ->
-    error_logger:warning_msg("Closing Instance: ~p in state time_wait~n", [State#state.instance]),
+    error_logger:warning_msg("Closing Instance: ~p in state time_wait, sent packets: ~p, sent_bytes: ~p~n", [State#state.instance, State#state.sent_packets, State#state.sent_bytes]),
     {stop, shutdown, State}.
 
 %%--------------------------------------------------------------------
@@ -2003,8 +2045,9 @@ handle_info(_Info, StateName, State) ->
 %% @spec terminate(Reason, StateName, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _StateName, _State) ->
+terminate(Reason, StateName, State) ->
     defrag_server:remove_connection_worker_by_pid(self()),
+    error_logger:warning_msg("Reason: ~p, StateName:~p, stack_trace_path: ~p~n", [Reason, StateName, State#state.stack_trace_path]),
     ok.
 
 %%--------------------------------------------------------------------
@@ -2024,7 +2067,7 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 
 modulo32bit(Value) when is_integer(Value)->
-    Value rem 16#100000000.
+    Value band 16#FFFFFFFF.
 
 add_modulo_32bit(Seqno, Offset) ->
     modulo32bit(Seqno+Offset).
@@ -2048,7 +2091,7 @@ forward_sequence_no(SeqnoNew, undefined, _Window) ->
 forward_sequence_no(SeqnoNew, SeqnoOld, Window) ->
     SeqA = modulo32bit(SeqnoNew),
     SeqB = modulo32bit(SeqnoOld),
-%%% error_logger:warning_msg("Forwarding sequence Number from ~p to ~p with Window:~p~n", [SeqB, SeqA, Window]),
+    %%error_logger:warning_msg("Forwarding sequence Number from ~p to ~p with Window:~p~n", [SeqB, SeqA, Window]),
     if
 	SeqA >= SeqB ->
 	    if
@@ -2173,30 +2216,30 @@ storeState_RCV_NXT(Direction=false,     State,  SEG_SEQ, false) ->
 
 storeState_RCV_NXT(Direction=true, #state{initiator_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, true = _Syn_or_Fin)
   when (RCV_NXT == SEG_SEQ)->
-						% error_logger:warning_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port, RCV_NXT, SEG_SEQ]),
+    %%error_logger:info_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n"), [State#state.initiator_port, State#state.responder_port, RCV_NXT, SEG_SEQ]),
     State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +1), State#state.initiator_RCV_NXT, calculate_window(Direction, State))};
 
 storeState_RCV_NXT(Direction=true, #state{initiator_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, false = _Syn_or_Fin)
   when (RCV_NXT == SEG_SEQ)->
-						% error_logger:warning_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port,RCV_NXT, SEG_SEQ]),
+    %%error_logger:info_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port,RCV_NXT, SEG_SEQ]),
     State#state{initiator_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN + 0), State#state.initiator_RCV_NXT, calculate_window(Direction, State))};
 
 storeState_RCV_NXT(Direction=false, #state{responder_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, true = _Syn_or_Fin)
   when (RCV_NXT == SEG_SEQ)->
-						% error_logger:warning_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
+    %%error_logger:info_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
     State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +1), State#state.responder_RCV_NXT, calculate_window(Direction, State))};
 
 storeState_RCV_NXT(Direction=false,  #state{responder_RCV_NXT = RCV_NXT} = State, SEG_SEQ, SEG_LEN, false = _Syn_or_Fin)
   when (RCV_NXT == SEG_SEQ)->
-						% error_logger:warning_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
+    %%error_logger:info_msg("Ports: ~p <-> ~p RCV_NXT:~p  matches SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
     State#state{responder_RCV_NXT = forward_sequence_no(modulo32bit(SEG_SEQ+SEG_LEN +0), State#state.responder_RCV_NXT, calculate_window(Direction, State))};
 
 storeState_RCV_NXT(true,  #state{initiator_RCV_NXT = _RCV_NXT} = State, _SEG_SEQ, _SEG_LEN,  _Syn_or_Fin) ->
-						% error_logger:warning_msg("Ports: ~p <-> ~p RCV_NXT:~p does not match SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port,RCV_NXT, SEG_SEQ]),
+    %%error_logger:info_msg("Ports: ~p <-> ~p RCV_NXT:~p does not match SEG_SEQ:~p~n", [State#state.initiator_port, State#state.responder_port, _RCV_NXT, _SEG_SEQ]),
     State;
 
 storeState_RCV_NXT(false,  #state{responder_RCV_NXT = _RCV_NXT} = State, _SEG_SEQ, _SEG_LEN,  _Syn_or_Fin) ->
-						% error_logger:warning_msg("Ports: ~p <-> ~p RCV_NXT:~p does not match SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,RCV_NXT, SEG_SEQ]),
+    %%error_logger:info_msg("Ports: ~p <-> ~p RCV_NXT:~p does not match SEG_SEQ:~p~n", [State#state.responder_port, State#state.initiator_port,_RCV_NXT, _SEG_SEQ]),
     State.
 
 storeState_SND_UNA(_, State, _SEG_ACK, false) ->
@@ -2205,30 +2248,30 @@ storeState_SND_UNA(_, State, _SEG_ACK, false) ->
 storeState_SND_UNA(true = Direction, State, SEG_ACK, true) ->
     case test_ack_valid(Direction, State, SEG_ACK) of
 	valid_ack ->
-						% error_logger:warning_msg("Valid Ack!! Forwarding SND_UNA from:  ~p to: ~p~n",[State#state.initiator_SND_UNA, add_modulo_32bit(SEG_ACK,0)]),
+	    %%error_logger:info_msg("Valid Ack!! Forwarding SND_UNA from:  ~p to: ~p~n",[State#state.initiator_SND_UNA, add_modulo_32bit(SEG_ACK,0)]),
 	    State#state{initiator_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
 	repetition_ack ->
-						% error_logger:warning_msg("Information: Repetition Ack:~p received~n",[SEG_ACK]),
+	    %%error_logger:info_msg("Information: Repetition Ack:~p received~n",[SEG_ACK]),
 	    State;
 	invalid_ack ->
             SND_UNA = State#state.initiator_SND_UNA,
             SND_WND = calculate_window(Direction, State),
-	    error_logger:error_msg("Error: ~ninvalid Ack: ~p for SND_UNA: ~p SND_WND: ~p and SND_UNA+SND_WND: ~p received~n",[SEG_ACK, SND_UNA, SND_WND, SND_UNA+SND_WND]),
+	    %%error_logger:error_msg("Error: ~ninvalid Ack: ~p for SND_UNA: ~p SND_WND: ~p and SND_UNA+SND_WND: ~p received~n",[SEG_ACK, SND_UNA, SND_WND, SND_UNA+SND_WND]),
 	    State
     end;
 
 storeState_SND_UNA(false = Direction, State, SEG_ACK, true) ->
     case test_ack_valid(Direction, State, SEG_ACK) of
 	valid_ack ->
-						% error_logger:warning_msg("Valid Ack!! Forwarding SND_UNA from:  ~p to: ~p~n",[State#state.responder_SND_UNA, add_modulo_32bit(SEG_ACK,0)]),
+	    %%error_logger:info_msg("Valid Ack!! Forwarding SND_UNA from:  ~p to: ~p~n",[State#state.responder_SND_UNA, add_modulo_32bit(SEG_ACK,0)]),
 	    State#state{responder_SND_UNA = add_modulo_32bit(SEG_ACK,0)};
 	repetition_ack ->
-						% error_logger:warning_msg("Information: Repetition Ack:~p received~n",[SEG_ACK]),
+	    %%error_logger:info_msg("Information: Repetition Ack:~p received~n",[SEG_ACK]),
 	    State;
 	invalid_ack ->
             SND_UNA = State#state.responder_SND_UNA,
             SND_WND = calculate_window(Direction, State),
-	    error_logger:error_msg("Error: ~ninvalid Ack: ~p for SND_UNA: ~p SND_WND: ~p and SND_UNA+SND_WND: ~p received~n",[SEG_ACK, SND_UNA, SND_WND, SND_UNA+SND_WND]),
+	    %%error_logger:error_msg("Error: ~ninvalid Ack: ~p for SND_UNA: ~p SND_WND: ~p and SND_UNA+SND_WND: ~p received~n",[SEG_ACK, SND_UNA, SND_WND, SND_UNA+SND_WND]),
 	    State
     end.
 
@@ -2248,13 +2291,13 @@ storeState_Payload(_Direction=false, State, _SEG_SEQ, 0 =_PayloadLength, <<>> = 
 storeState_Payload(_Direction=true, State, SEG_SEQ, PayloadLength, Payload) ->
     SmallerOrEqualFun = fun({A,_, _},{B,_, _}) -> A =< B end,
     StateNew = State#state{initiator_payload_store = lists:usort(SmallerOrEqualFun, [{SEG_SEQ, PayloadLength, Payload}|State#state.initiator_payload_store])},
-						% error_logger:warning_msg("PayloadStore Direction ~p contains now ~p packages~n",[Direction, length(StateNew#state.initiator_payload_store)]),
+    %%error_logger:info_msg("PayloadStore Direction ~p contains now ~p packages~n",[_Direction, length(StateNew#state.initiator_payload_store)]),
     StateNew;
 
 storeState_Payload(_Direction=false, State, SEG_SEQ, PayloadLength, Payload) ->
     SmallerOrEqualFun = fun({A,_, _},{B,_, _}) -> A =< B end,
     StateNew = State#state{responder_payload_store = lists:usort(SmallerOrEqualFun, [{SEG_SEQ, PayloadLength, Payload}|State#state.responder_payload_store])},
-						% error_logger:warning_msg("PayloadStore Direction: ~p contains now ~p packages~n",[Direction, length(StateNew#state.responder_payload_store)]),
+    %%error_logger:info_msg("PayloadStore Direction: ~p contains now ~p packages~n",[_Direction, length(StateNew#state.responder_payload_store)]),
     StateNew.
 
 storeState_SND_WND_SCALE(true, State, ShiftCount) ->
@@ -2279,40 +2322,46 @@ copy_state_to_close_initiator_close_responder(false, State) ->
       close_responder_port          = State#state.initiator_port}.
 
 log_initiator_responder(_StateName, _SEG_SEQ, _SEG_ACK, _SEG_WND, _State) ->
-						% error_logger:warning_msg("State: ~p, SEG_SEQ: ~w, SEG_ACK: ~w, SEG_WND: ~w~n", [StateName, SEG_SEQ, SEG_ACK, SEG_WND]),
-						% error_logger:warning_msg("i_address: ~p, i_port : ~w, i_RCV_WND ~w, i_SND_UNA: ~w, i_RCV_NXT:~w~n", [State#state.initiator_address, State#state.initiator_port, State#state.initiator_RCV_WND, State#state.initiator_SND_UNA, State#state.initiator_RCV_NXT]),
-						% error_logger:warning_msg("r_address: ~p, r_port : ~w, r_RCV_WND ~w, r_SND_UNA: ~w, r_RCV_NXT: ~w~n", [State#state.responder_address, State#state.responder_port, State#state.responder_RCV_WND, 	State#state.responder_SND_UNA, State#state.responder_RCV_NXT]),
+    %%error_logger:info_msg("State: ~p, SEG_SEQ: ~w, SEG_ACK: ~w, SEG_WND: ~w~n", [_StateName, _SEG_SEQ, _SEG_ACK, _SEG_WND]),
+    %%error_logger:warning_msg("i_address: ~p, i_port : ~w, i_RCV_WND ~w, i_SND_UNA: ~w, i_RCV_NXT:~w~n", [_State#state.initiator_address, _State#state.initiator_port, _State#state.initiator_RCV_WND, _State#state.initiator_SND_UNA, _State#state.initiator_RCV_NXT]),
+    %%error_logger:info_msg("r_address: ~p, r_port : ~w, r_RCV_WND ~w, r_SND_UNA: ~w, r_RCV_NXT: ~w~n", [_State#state.responder_address, _State#state.responder_port, _State#state.responder_RCV_WND, 	_State#state.responder_SND_UNA, _State#state.responder_RCV_NXT]),
     true.
 
-forward_payload([ServerPid|ServerPids], {Source_address, Source_port} = _Source,{Destination_address, Destination_port} = _Destination, Payload) ->
-						% error_logger:warning_msg("Sending data: ServerPid: ~p, Source: ~p:~p, Destination: ~p:~p, PayloadLength ~p~n", [ServerPid, Source_address, Source_port, Destination_address, Destination_port, byte_size(Payload)]),
-    ok= gen_server:call(ServerPid, {payload_section, Source_address, Source_port, Destination_address, Destination_port, Payload}, infinity),
-    forward_payload(ServerPids, {Source_address, Source_port}, {Destination_address, Destination_port}, Payload);
 
-forward_payload([], _Source, _Destination, _Payload) ->
-    ok.
+forward_payload(ServerPids, Source, Destination, Payload) ->
+    forward_payload(ServerPids, Source, Destination, Payload, 0, 0).
+
+forward_payload([ServerPid|ServerPids], {Source_address, Source_port} = _Source,{Destination_address, Destination_port} = _Destination, Payload, Sent_packets, Sent_bytes) ->
+    %%error_logger:info_msg("Sending data: ServerPid: ~p, Source: ~p:~p, Destination: ~p:~p, PayloadLength ~p~n", [ServerPid, Source_address, Source_port, Destination_address, Destination_port, byte_size(Payload)]),
+    Sent_bytesNew = Sent_bytes +byte_size(Payload), 
+    ok= gen_server:call(ServerPid, {payload_section, Source_address, Source_port, Destination_address, Destination_port, Payload}, infinity),
+    Sent_packetsNew = Sent_packets+1, 
+    forward_payload(ServerPids, {Source_address, Source_port}, {Destination_address, Destination_port}, Payload, Sent_packetsNew, Sent_bytesNew);
+
+forward_payload([], _Source, _Destination, _Payload, Sent_packets, Sent_bytes) ->
+    {ok, Sent_packets, Sent_bytes}.
 
 %% Here Direction is always the opposite side, as Ack forwards the packages of the peer side
 forward_defrag_ack_payload_store(Direction=false, Fin, Source, Destination, #state{initiator_ack_payload_store = Payload_store} = State) when byte_size(Payload_store) >= 1500->
     <<Payload_forward:1500/binary-unit:8, Payload_rest/binary>> = Payload_store,
-    forward_payload(State#state.child_worker_list,  Source, Destination, Payload_forward),
-    StateNew = State#state{initiator_ack_payload_store = Payload_rest},
+    {ok, Sent_packets, Sent_bytes} = forward_payload(State#state.child_worker_list,  Source, Destination, Payload_forward),
+    StateNew = State#state{initiator_ack_payload_store = Payload_rest, sent_packets = State#state.sent_packets + Sent_packets, sent_bytes = State#state.sent_bytes + Sent_bytes},
     forward_defrag_ack_payload_store(Direction, Fin, Source, Destination, StateNew);
 
 forward_defrag_ack_payload_store(Direction=true, Fin, Source, Destination, #state{responder_ack_payload_store = Payload_store} = State) when byte_size(Payload_store) >= 1500->
     <<Payload_forward:1500/binary-unit:8, Payload_rest/binary>> = Payload_store,
-    forward_payload(State#state.child_worker_list,  Source, Destination, Payload_forward),
-    StateNew = State#state{responder_ack_payload_store = Payload_rest},
+    {ok, Sent_packets, Sent_bytes} = forward_payload(State#state.child_worker_list,  Source, Destination, Payload_forward),
+    StateNew = State#state{responder_ack_payload_store = Payload_rest, sent_packets = State#state.sent_packets + Sent_packets, sent_bytes = State#state.sent_bytes + Sent_bytes},
     forward_defrag_ack_payload_store(Direction, Fin, Source, Destination, StateNew);
 
 forward_defrag_ack_payload_store(_Direction=false, true = _Fin, Source, Destination, #state{initiator_ack_payload_store = Payload_store} = State)->
-    forward_payload(State#state.child_worker_list, Source, Destination, Payload_store),
-    StateNew = State#state{initiator_ack_payload_store = <<>>},
+    {ok, Sent_packets, Sent_bytes} = forward_payload(State#state.child_worker_list, Source, Destination, Payload_store),
+    StateNew = State#state{initiator_ack_payload_store = <<>>, sent_packets = State#state.sent_packets + Sent_packets, sent_bytes = State#state.sent_bytes + Sent_bytes},
     StateNew;
 
 forward_defrag_ack_payload_store(_Direction=true, true = _Fin, Source, Destination, #state{initiator_ack_payload_store = Payload_store} = State)->
-    forward_payload(State#state.child_worker_list, Source, Destination, Payload_store),
-    StateNew = State#state{responder_ack_payload_store = <<>>},
+    {ok, Sent_packets, Sent_bytes} = forward_payload(State#state.child_worker_list, Source, Destination, Payload_store),
+    StateNew = State#state{responder_ack_payload_store = <<>>, sent_packets = State#state.sent_packets + Sent_packets, sent_bytes = State#state.sent_bytes + Sent_bytes},
     StateNew;
 
 forward_defrag_ack_payload_store(_Direction=true, false = _Fin, _Source, _Destination, State) ->
@@ -2323,19 +2372,19 @@ forward_defrag_ack_payload_store(_Direction=false, false = _Fin, _Source, _Desti
 
 
 checkPayloadReceptionBuffer(_Direction=true, false = _Ack, _SEG_ACK, _Syn_or_Fin, #state{} = State) ->
-						% error_logger:warning_msg("Received: Package with Ack = false in Direction ~p~n", [Direction]),
+    %%error_logger:info_msg("Received: Package with Ack = false in Direction ~p~n", [_Direction]),
     State;
 
 checkPayloadReceptionBuffer(_Direction=false, false = _Ack, _SEG_ACK, _Syn_or_Fin, #state{} = State) ->
-						% error_logger:warning_msg("Received: Package with Ack = false in Direction ~p~n", [Direction]),
+    %%error_logger:info_msg("Received: Package with Ack = false in Direction ~p~n", [_Direction]),
     State;
 
 checkPayloadReceptionBuffer(_Direction=true, _Ack, _SEG_ACK, _Syn_or_Fin, #state{initiator_payload_store = []} = State) ->
-						% error_logger:warning_msg("Check payload_store: Payloadstore in Direction ~p is empty~n", [Direction]),
+    %%error_logger:info_msg("Check payload_store: Payloadstore in Direction ~p is empty~n", [_Direction]),
     State;
 
 checkPayloadReceptionBuffer(_Direction=false, _Ack, _SEG_ACK, _Syn_or_Fin, #state{responder_payload_store = []} = State) ->
-						% error_logger:warning_msg("Check payload_store: Payloadstore in Direction ~p is empty~n", [Direction]),
+    %%error_logger:info_msg("Check payload_store: Payloadstore in Direction ~p is empty~n", [_Direction]),
     State;
 
 checkPayloadReceptionBuffer(Direction=true, Ack, SEG_ACK, Syn_or_Fin, #state{initiator_RCV_NXT = RCV_NXT, initiator_payload_store = [{SEG_SEQ, PayloadLength, Payload}|PayloadFrames]} = State) ->
@@ -2349,7 +2398,7 @@ checkPayloadReceptionBuffer(Direction=true, Ack, SEG_ACK, Syn_or_Fin, #state{ini
 		true ->
 		    case (Ack == true) of
 			true ->
-						% error_logger:warning_msg("Check payload_store: Payloadstore in Direction ~p has first payload with:~p bytes~n", [Direction, PayloadLength]),
+			    %%error_logger:info_msg("Check payload_store: Payloadstore in Direction ~p has first payload with:~p bytes~n", [Direction, PayloadLength]),
 			    Delta_overlap_ignore = add_modulo_32bit(RCV_NXT32, -SEG_SEQ32),
 			    case Delta_overlap_ignore =< PayloadLength of
 				true ->
@@ -2360,19 +2409,19 @@ checkPayloadReceptionBuffer(Direction=true, Ack, SEG_ACK, Syn_or_Fin, #state{ini
 				    StateNew  = StateNew2#state{initiator_payload_store = PayloadFrames},
 				    checkPayloadReceptionBuffer(Direction, Ack, SEG_ACK32, Syn_or_Fin, StateNew);
 				false ->
-						% error_logger:warning_msg("Check payload failed as no new data available!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p, PayloadLength: ~p~n",[Direction, SEG_SEQ, RCV_NXT, PayloadLength]),
+				    error_logger:error_msg("Check payload failed as no new data available!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p, PayloadLength: ~p~n",[Direction, SEG_SEQ, RCV_NXT, PayloadLength]),
 				    State#state{initiator_payload_store = PayloadFrames}
 			    end;
 			false ->
-						% error_logger:warning_msg("Information: Package with Ack == false received~n"),
+		            %%error_logger:warning_msg("Information: Package with Ack == false received~n"),
 			    State % Ack == false
 		    end;
 		false ->
-						% error_logger:warning_msg("????Duplicate ????? SEG_ACK < RCV_NXT32!!!!Direction: ~p, SEG_ACK: ~p, RCV_NXT:~p~n",[Direction, SEG_ACK, RCV_NXT]),
+		    error_logger:error_msg("????Duplicate ????? SEG_ACK < RCV_NXT32!!!!Direction: ~p, SEG_ACK: ~p, RCV_NXT:~p~n",[Direction, SEG_ACK, RCV_NXT]),
 		    State
 	    end;
 	false ->
-						% error_logger:warning_msg("Warning !!!!, SEG_SEQ > RCV_NXT, Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p~n",[Direction, SEG_SEQ, RCV_NXT]),
+            %%error_logger:error_msg("Warning !!!!, SEG_SEQ > RCV_NXT, Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p~n",[Direction, SEG_SEQ, RCV_NXT]),
 	    State
     end;
 
@@ -2388,7 +2437,7 @@ checkPayloadReceptionBuffer(Direction=false, Ack, SEG_ACK, Syn_or_Fin, #state{re
 		true ->
 		    case (Ack == true) of
 			true ->
-						% error_logger:warning_msg("Check payload_store: Payloadstore in Direction ~p has first payload with:~p bytes~n", [Direction, PayloadLength]),
+			    %%error_logger:info_msg("Check payload_store: Payloadstore in Direction ~p has first payload with:~p bytes~n", [Direction, PayloadLength]),
 			    Delta_overlap_ignore = add_modulo_32bit(RCV_NXT32, -SEG_SEQ32),
 			    case Delta_overlap_ignore =< PayloadLength of
 				true ->
@@ -2399,19 +2448,19 @@ checkPayloadReceptionBuffer(Direction=false, Ack, SEG_ACK, Syn_or_Fin, #state{re
 				    StateNew  = StateNew2#state{responder_payload_store = PayloadFrames},
 				    checkPayloadReceptionBuffer(Direction, Ack, SEG_ACK32, Syn_or_Fin, StateNew);
 				false ->
-						% error_logger:warning_msg("Check payload failed as no new data available!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p, PayloadLength: ~p~n",[Direction, SEG_SEQ, RCV_NXT, PayloadLength]),
+				    error_logger:error_msg("Check payload failed as no new data available!!!!Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p, PayloadLength: ~p~n",[Direction, SEG_SEQ, RCV_NXT, PayloadLength]),
 				    State#state{responder_payload_store = PayloadFrames}
 			    end;
 			false ->
-						% error_logger:warning_msg("Information: Package with Ack == false received~n"),
+			    %%error_logger:info_msg("Information: Package with Ack == false received~n"),
 			    State % Ack == false
 		    end;
 		false ->
-						% error_logger:warning_msg("????Duplicate ????? SEG_ACK < RCV_NXT32!!!!Direction: ~p, SEG_ACK: ~p, RCV_NXT:~p~n",[Direction, SEG_ACK, RCV_NXT]),
+		    error_logger:error_msg("????Duplicate ????? SEG_ACK < RCV_NXT32!!!!Direction: ~p, SEG_ACK: ~p, RCV_NXT:~p~n",[Direction, SEG_ACK, RCV_NXT]),
 		    State
 	    end;
 	false ->
-						% error_logger:warning_msg("Warning !!!!, SEG_SEQ > RCV_NXT, Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p~n",[Direction, SEG_SEQ, RCV_NXT]),
+	    %%error_logger:error_msg("Warning !!!!, SEG_SEQ > RCV_NXT, Direction: ~p, SEG_SEQ: ~p, RCV_NXT:~p~n",[Direction, SEG_SEQ, RCV_NXT]),
 	    State
     end.
 
