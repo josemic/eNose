@@ -162,8 +162,7 @@ handle_call({remove_connection_worker_by_pid, Pid}, _From, State) ->
 	{not_found, Pid} ->		
 	    StateNew = State;
     	{found, Pid, Connection_worker_pid_list_new} ->
-	    StateNew = State#state{connection_worker_pid_list = Connection_worker_pid_list_new, 
-                                   connection_worker_instance = State#state.connection_worker_instance-1}
+	    StateNew = State#state{connection_worker_pid_list = Connection_worker_pid_list_new}
     end,
     {reply, ok, StateNew}.
 
@@ -232,17 +231,6 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
     case get_connection_worker_pid_by_address_tuple(State#state.connection_worker_pid_list, 
 						    {{Source_address, Sport},{Destination_address, Dport}}) of
 	{not_found, _AddressTuple} ->
-	    %%Header = epcap_port_lib:header(TCP),
-	    %%{flags, Flags} = lists:keyfind(flags, 1, Header),
-	    %%Syn = lists:member(syn, Flags),
-	    %%Ack = lists:member(ack, Flags),
-	    %%Fin = lists:member(fin, Flags),
-	    %%Rst = lists:member(rst, Flags),
-            %%{seq, Seqno} = lists:keyfind(seq, 1, Header),
-            %%{ack, Ackno} = lists:keyfind(ack, 1, Header),
-            %%{win, Win} = lists:keyfind(win, 1, Header),
-            %%{opt, OptBinary} = lists:keyfind(opt, 1, Header),
-            %%Opt = tcp_options(OptBinary),
             PayloadSize = payloadsize(IP, TCP),
             Payload = <<PayloadPadded:PayloadSize/binary>>,
 	    Chksum_ok = case IP of
@@ -271,14 +259,14 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 							   DLT, Time, Len, Packet, PayloadSize=0}, 
 							  StateNew1#state.child_worker_pid_list), 
 			    AddressTuple = {{Source_address, Sport}, {Destination_address, Dport}},
-			    StateNew = StateNew1#state{connection_worker_pid_list = 
+			    StateNew2 = StateNew1#state{connection_worker_pid_list = 
 							   insert_element(StateNew1#state.connection_worker_pid_list, {AddressTuple, ConnectionWorkerPid})};
 			_Other -> 
 			    %% drop packet, as it is out of band packet
-			    StateNew = State
+			    StateNew2 = State
                     end;
 		false ->
-                    StateNew = State,
+                    StateNew2 = State,
 		    ok % ignore packet as checksum  not ok
 	    end;
 
@@ -323,9 +311,9 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 		false ->
 		    ok % ignore packet as checksum is not ok			
 	    end,
-            StateNew = State
+            StateNew2 = State
     end,
-    {noreply, StateNew};
+    {noreply, StateNew2};
 handle_info(_Info, State) ->
     {noreply, State}.
 
