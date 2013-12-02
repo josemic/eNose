@@ -42,6 +42,8 @@
 -define(SERVER, ?MODULE). 
 
 -record(state, {
+	  received_packets::integer(),
+	  received_bytes::integer(),
 	  epcap_worker_pid::pid(),
 	  instance::integer(),
 	  matchfun::function(), 
@@ -96,7 +98,7 @@ stop(WorkerPid) ->
 %% @end
 %%--------------------------------------------------------------------
 init([Instance, OptionElementSorted]) ->    
-    State = #state{instance=Instance, option_element_sorted = OptionElementSorted},
+    State = #state{received_packets = 0, received_bytes = 0, instance=Instance, option_element_sorted = OptionElementSorted},
     case lists:keyfind(matchfun, 1, OptionElementSorted) of
 	{matchfun, MatchFun} -> 
 	    NewState1 = State#state{matchfun = MatchFun}, 
@@ -133,14 +135,16 @@ init([Instance, OptionElementSorted]) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call({payload_section, Saddr, Sport, Daddr, Dport, Payload}, _From, State) ->
+    StateNew = State#state{received_packets= State#state.received_packets+1, received_bytes= State#state.received_bytes + byte_size(Payload)},
     Proto = tcp,
     Matchfun = State#state.matchfun,
     case (Matchfun(Payload)) of
 	fail ->
 	    ok;
-	_     ->
+	Found     ->
 	    error_logger:info_msg("Logging: Instance: ~p, PID: ~p",[State#state.instance, self()]),
-	    error_logger:info_msg("Message: ~p~n",[State#state.message]),
+	    error_logger:info_msg("Message: ~p, ~n~nPattern found: ~p~n",[State#state.message, Found]),
+	    error_logger:info_msg("Received packages: ~p, Received bytes: ~p~n",[State#state.received_packets, State#state.received_bytes]),
 	    error_logger:info_report([
 				      self(),	   
 						% Source
@@ -157,7 +161,7 @@ handle_call({payload_section, Saddr, Sport, Daddr, Dport, Payload}, _From, State
 				     ])
     end,
     Reply = ok,
-    {reply, Reply, State};
+    {reply, Reply, StateNew};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 handle_call(_Request, _From, State) ->
@@ -190,7 +194,7 @@ handle_cast(_Msg, State) ->
 
 handle_info({packet, DLT, Time, Len, Packet}, State) ->
     [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-
+    StateNew = State#state{received_packets = State#state.received_packets+1, received_bytes= State#state.received_bytes + byte_size(Payload)},
     {Saddr, Daddr, Proto} = case IP of
 				#ipv4{saddr = S, daddr = D, p = P} ->
 				    {S,D,P};
@@ -202,9 +206,10 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
     case (Matchfun(Payload)) of
 	fail ->
 	    ok;
-	_     ->
+	Found     ->
 	    error_logger:info_msg("Logging: Instance: ~p, PID: ~p, at ~p~n",[State#state.instance, self(),epcap_port_lib:timestamp(Time)]),
-	    error_logger:info_msg("Message: ~p~n",[State#state.message]),
+	    error_logger:info_msg("Message: ~p, ~n~Pattern found: ~p~n",[State#state.message, Found]),
+	    error_logger:info_msg("Received packages: ~p, Received bytes: ~p~n",[State#state.received_packets, State#state.received_bytes]),
 	    error_logger:info_report([
 				      self(),	   
 				      {time, epcap_port_lib:timestamp(Time)},
@@ -229,7 +234,7 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
 				      {payload, epcap_port_lib:payload(Payload)}
 				     ])
     end,
-    {noreply, State};
+    {noreply, StateNew};
 handle_info(_Info, State) -> 
     {noreply, State}.
 
@@ -244,7 +249,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    error_logger:info_msg("Received packages: ~p, Received bytes: ~p~n",[State#state.received_packets, State#state.received_bytes]),
     ok.
 
 %%--------------------------------------------------------------------
