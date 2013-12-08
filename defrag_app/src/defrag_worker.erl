@@ -2417,7 +2417,7 @@ checkPayloadReceptionBuffer(Direction=true, Ack, SEG_ACK, Syn_or_Fin, #state{ini
 			    State % Ack == false
 		    end;
 		false ->
-		    error_logger:error_msg("????Duplicate ????? SEG_ACK < RCV_NXT32!!!!Direction: ~p, SEG_ACK: ~p, RCV_NXT:~p~n",[Direction, SEG_ACK, RCV_NXT]),
+		    %% overlapping received data and acknowledgement
 		    State
 	    end;
 	false ->
@@ -2456,7 +2456,7 @@ checkPayloadReceptionBuffer(Direction=false, Ack, SEG_ACK, Syn_or_Fin, #state{re
 			    State % Ack == false
 		    end;
 		false ->
-		    error_logger:error_msg("????Duplicate ????? SEG_ACK < RCV_NXT32!!!!Direction: ~p, SEG_ACK: ~p, RCV_NXT:~p~n",[Direction, SEG_ACK, RCV_NXT]),
+		    % overlapping received data and acknowledgement
 		    State
 	    end;
 	false ->
