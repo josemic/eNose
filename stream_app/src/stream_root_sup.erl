@@ -27,7 +27,7 @@
 %% LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 %% ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 %% POSSIBILITY OF SUCH DAMAGE.
--module(defrag_root_sup).
+-module(stream_root_sup).
 
 -behaviour(supervisor).
 %% API
@@ -62,11 +62,11 @@ start_worker(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackn
     Name_s = ?MODULE_STRING ++ "_" ++ Instance_s ++ "_" ++ Ref_s,  
     Name = list_to_atom (Name_s),
     %% the name must be a unique atom
-    Defrag_worker = {Name, {defrag_worker, start_link, [Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
+    Stream_worker = {Name, {stream_worker, start_link, [Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
 								   {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
 								   DLT, Time, Len, Packet, PayloadLength},ChildWorkerList]},
-		     temporary, 2000, worker, [defrag_worker]},
-    {ok, Result} = supervisor:start_child(?SERVER, Defrag_worker),
+		     temporary, 2000, worker, [stream_worker]},
+    {ok, Result} = supervisor:start_child(?SERVER, Stream_worker),
     io:format("Supervisor ~p start result: ~p~n", [?SERVER, Result]), 
     {ok, Result}.
 
@@ -74,7 +74,7 @@ stop_worker(ConnectionWorkerPid) ->
     %%Result = supervisor:terminate_child(?SERVER, WorkerPid), 
     %%io:format("Supervisor stopping Pid ~p with result~p~n", [WorkerPid, Result]), 
     %%Result.
-    defrag_worker:stop(ConnectionWorkerPid).
+    stream_worker:stop(ConnectionWorkerPid).
 %%gen_server:call(WorkerPid, stop_worker).
 
 %%%===================================================================
@@ -100,10 +100,10 @@ init([]) ->
     MaxSecondsBetweenRestarts = 60,
 
     SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
-    Defrag_server = {{local, defrag_server}, {defrag_server, start_link, []},
-		     permanent, 2000, worker, [defrag_server]},
+    Stream_server = {{local, stream_server}, {stream_server, start_link, []},
+		     permanent, 2000, worker, [stream_server]},
 
-    {ok, {SupFlags, [Defrag_server]}}.
+    {ok, {SupFlags, [Stream_server]}}.
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================

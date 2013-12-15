@@ -11,7 +11,7 @@ s()->
     io:format("epcap_port_app started Res: ~p~n",[Res_epcap_port_start]),	
     Res_content_start = application:start(content),
     io:format("content_app started Res: ~p~n",[Res_content_start]),	
-    Res_content_start = application:start(defrag),
+    Res_content_start = application:start(stream),
     io:format("content_app started Res: ~p~n",[Res_content_start]),
     %% traces for testing
     %%dbg:tracer(),
@@ -21,7 +21,7 @@ s()->
     %%dbg:tpl(epcap_root_sup, x),
     %%dbg:tpl(content_root_sup, x),	
     %%dbg:tpl(echo_server, x),
-    %%dbg:tpl(defrag_worker, x),
+    %%dbg:tpl(stream_worker, x),
     %%dbg:tpl(supervisor, x),
     %%dbg:p(new, m),
     %%dbg:p(new, p),
@@ -29,6 +29,6 @@ s()->
 			A = parser_combinator_bitstring:pBinarystringCaseInsensitive(<<"ubuntu">>),
 			B = parser_combinator_bitstring:pUntilN( A, 1300 ),
 			parser_combinator_bitstring:parse(B,Payload) end,
-    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}, {filter, "tcp"}]}, {defrag, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *Ubuntu*"}]}]),
+    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}, {filter, "tcp"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *Ubuntu*"}]}]),
     io:format("Start result 2: ~p~n",[Result1]).
 

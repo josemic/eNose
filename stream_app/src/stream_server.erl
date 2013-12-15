@@ -27,7 +27,7 @@
 %% LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 %% ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 %% POSSIBILITY OF SUCH DAMAGE.
--module(defrag_server).
+-module(stream_server).
 
 -behaviour(gen_server).
 -include_lib("pkt/include/pkt.hrl").
@@ -108,7 +108,7 @@ remove_connection_worker_by_pid(Pid) ->
 %% @end
 %%--------------------------------------------------------------------
 init([]) ->
-    io:format("Defrag_server started\n"),
+    io:format("Stream_server started\n"),
     {ok, #state{connection_worker_instance = 0, child_worker_instance = 0, connection_worker_pid_list = [], child_worker_pid_list = [], crash = true}}.
 
 
@@ -129,7 +129,7 @@ init([]) ->
 
 handle_call({start_worker, AddressTuple, PacketTuple}, _From, State) ->
     StateNew = State#state{connection_worker_instance = (State#state.connection_worker_instance + 1)}, 	
-    Reply = defrag_root_sup:start_worker(StateNew#state.connection_worker_instance, AddressTuple, PacketTuple),
+    Reply = stream_root_sup:start_worker(StateNew#state.connection_worker_instance, AddressTuple, PacketTuple),
     {reply, Reply, StateNew};
 handle_call({stop_worker, Pid}, _From, State) ->
     Connection_worker_pid_list = State#state.connection_worker_pid_list,
@@ -140,7 +140,7 @@ handle_call({stop_worker, Pid}, _From, State) ->
 	    StateNew = State#state{connection_worker_pid_list = Connection_worker_pid_list}
     end,
     StateNew2 = State#state{connection_worker_instance = StateNew#state.connection_worker_instance - 1},
-    Reply = defrag_root_sup:stop_worker(Pid),
+    Reply = stream_root_sup:stop_worker(Pid),
     {reply, Reply, StateNew2};
 handle_call({register_child_worker_Pid, ChildWorkerPid}, _From, State) ->
     NewState = State#state{child_worker_instance = State#state.child_worker_instance+1, child_worker_pid_list = [ChildWorkerPid|State#state.child_worker_pid_list]},
@@ -252,7 +252,7 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 		    case {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt} of
 			{false, true, false, false, _, _, _, _} -> % Syn
 			    StateNew1 = State#state{connection_worker_instance = State#state.connection_worker_instance + 1}, 	
-			    {ok, ConnectionWorkerPid} = defrag_root_sup:start_worker(
+			    {ok, ConnectionWorkerPid} = stream_root_sup:start_worker(
 							  StateNew1#state.connection_worker_instance, 
 							  {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
 							   {{Source_address, Sport}, {Destination_address, Dport}}, 
@@ -304,7 +304,7 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 			end,	    
 	    case Chksum_ok of
                 true -> 
-		    defrag_worker:send_packet(WorkerPid, 
+		    stream_worker:send_packet(WorkerPid, 
 					      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
 					       {{Source_address, Sport}, {Destination_address, Dport}}, 
 					       DLT, Time, Len, Packet, PayloadSize});

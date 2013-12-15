@@ -1,7 +1,0 @@
-{application, defrag, [
-    {description, "packet defragmentation engine"},
-    {vsn, "0.0.1"},
-    {registered,[defrag_server, defrag_root_sup]},
-    {applications, [kernel]},
-    {mod, {defrag_app,[]}}
-]}.

@@ -27,7 +27,7 @@
 %% LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 %% ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 %% POSSIBILITY OF SUCH DAMAGE.
--module(defrag_app).
+-module(stream_app).
 
 -behaviour(application).
 
@@ -56,9 +56,9 @@
 %% @end
 %%--------------------------------------------------------------------
 start(_StartType, _StartArgs) ->
-    case defrag_root_sup:start_link() of
+    case stream_root_sup:start_link() of
 	{ok, Pid} ->
-	    io:format("started defrag_root_sup with PID: ~p~n",[Pid]),			
+	    io:format("started stream_root_sup with PID: ~p~n",[Pid]),			
 	    {ok, Pid};
 	Error ->
 	    Error
