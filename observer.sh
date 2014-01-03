@@ -5,4 +5,4 @@
 #  to start second observer:
 # ./observer 2
 # etc. 
-erl -sname observer$1 -hidden -setcookie MyCookie -run observer
+erl -sname observer$1 -hidden -setcookie myCookie -run observer

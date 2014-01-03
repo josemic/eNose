@@ -1,13 +1,13 @@
 -module(s12_PF_RING_cluster).
 
 %% API
--export([s/1]).
+-export([s/1, s/2]).
 
-s([Cluster_ID])->
-    s(Cluster_ID);
-s(Cluster_ID)when not(is_integer(Cluster_ID))->
-    s(string:to_integer(Cluster_ID));
-s(Cluster_ID)when is_integer(Cluster_ID)->
+s([Interface, Cluster_ID]) when is_atom(Interface) and is_atom(Cluster_ID)->
+   io:format("Interface:~p ,Cluster_ID:~p~n ", [Interface, Cluster_ID]), 
+   s(atom_to_list(Interface),  list_to_integer(atom_to_list(Cluster_ID))).
+
+s(Interface, Cluster_ID) when is_list(Interface) and is_integer(Cluster_ID)->
     %% test case:
     %% start 2 rules
 
@@ -38,6 +38,6 @@ s(Cluster_ID)when is_integer(Cluster_ID)->
 				Other -> Other % found
 			end
                 end,
-    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}, {cluster_id, Cluster_ID}, {filter, "tcp"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubunt* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
+    {ok, Result1} = rule:start([{epcap_port,[{interface, Interface}, {cluster_id, Cluster_ID}, {filter, "tcp"}, {group, "root"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubunt* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
     io:format("Start result 1: ~p~n",[Result1]).
 

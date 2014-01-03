@@ -31,6 +31,8 @@
 
 -behaviour(gen_server).
 -include_lib("pkt/include/pkt.hrl").
+-include("debug_macro.hrl").
+-include("decoded.hrl").
 
 %% API
 -export([start_link/0, start_worker/2, stop_worker/1, remove_connection_worker_by_pid/1, rule_element_register/3, 
@@ -41,6 +43,18 @@
 	 terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE). 
+
+-define(DEBUG_SERVER, true).
+
+-ifdef(DEBUG_SERVER).
+%%-define(GEN_FSM_OPTS, {debug, [trace, {log_to_file, "log/stream/trace_server.log"}]}).
+-define(GEN_FSM_OPTS, {debug, [{log_to_file, "log/stream/trace_server.log"}]}).
+%%-define(GEN_FSM_OPTS, {debug, [{install,{Dbg_fun,state}}]}).
+%%-define(GEN_FSM_OPTS, {debug, [{install,{Dbg_fun,state}}, {log_to_file, "log/stream/trace_server.log"}]}).
+%%-define(GEN_FSM_OPTS, {debug, [trace]}).
+-else.
+-define(GEN_FSM_OPTS, []).
+-endif.
 
 -record(state, {
           crash::boolean(),
@@ -204,32 +218,29 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({packet, DLT, Time, Len, Data}, State) ->
+handle_info({packet, DLT, _Time, _Len, Data}, State) ->
     Packet = epcap_port_lib:decode(DLT, Data, State#state.crash),
     [_EtherIgnore, IP, TCP, PayloadPadded] = Packet,
-    {Saddr, Daddr, _Proto} = case IP of
+    {Source_address, Destination_address, _Proto} = case IP of
 				 #ipv4{saddr = S, daddr = D, p = P} ->
 				     {S,D,P};
 
 				 #ipv6{saddr = S, daddr = D, next = P} ->
 				     {S,D,P}
 			     end,
-    Source_address = Saddr,
-    %Source_address = inet_parse:ntoa(Saddr),
-    %%Source_port = epcap_port_lib:port(sport, TCP),
-    %Destination_address = inet_parse:ntoa(Daddr),
-    Destination_address = Daddr,
-    %%Destination_port = epcap_port_lib:port(dport, TCP),
-    #tcp{sport = Sport, dport = Dport, ackno = Ackno, seqno = Seqno,
-         win = Win, cwr = _CWR, ece = _ECE, urg = _URG, ack = ACK, psh = _PSH,
-         rst = RST, syn = SYN, fin = FIN, opt = OptBinary} = TCP, 
-    Ack = (ACK =:=1),
-    Rst = (RST =:=1),
-    Syn = (SYN =:=1),
-    Fin = (FIN =:=1),
-    Opt = pkt_tcp:options(OptBinary),
+    Opt = pkt_tcp:options(TCP#tcp.opt),
+    case  (TCP#tcp.syn == 1) of 
+      true ->
+        ?DEBUG("Syn:{Ack:~p, Syn:~p, Fin:~p, _Rst:~p, SEG_SEQ:~p, SEG_ACK:~p, SEG_WND:~p, OPT:~p},~n
+        {{Sender_address:~p, Sender_port:~p},~n
+        {Receiver_address:~p, Receiver_port:~p}},~n
+         _DLT:~p, _Time:~p, _Len:~p}~n", [TCP#tcp.ack, TCP#tcp.syn, TCP#tcp.fin, TCP#tcp.rst, TCP#tcp.seqno, TCP#tcp.ackno, TCP#tcp.win, TCP#tcp.opt, Source_address, TCP#tcp.sport, 
+        Destination_address, TCP#tcp.dport, DLT, _Time, _Len]);
+      false ->
+       ok
+    end,
     case get_connection_worker_pid_by_address_tuple(State#state.connection_worker_pid_list, 
-						    {{Source_address, Sport},{Destination_address, Dport}}) of
+						    AddressTuple = {{Source_address, TCP#tcp.sport},{Destination_address, TCP#tcp.dport}}) of
 	{not_found, _AddressTuple} ->
             PayloadSize = payloadsize(IP, TCP),
             Payload = <<PayloadPadded:PayloadSize/binary>>,
@@ -241,53 +252,46 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 				    [0,0] ->
 					true;
 				    [_,_] ->
-					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
+					?DEBUG("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum: ~p, TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
 					false
 				end;
 			    #ipv6{} ->
 				true % checksum not implemented for ipv6 
 			end,
- 	    case Chksum_ok of
+	    case Chksum_ok of
 		true ->
-		    case {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt} of
-			{false, true, false, false, _, _, _, _} -> % Syn
+		    case {TCP#tcp.ack, TCP#tcp.syn, TCP#tcp.fin, TCP#tcp.rst} of
+			{0, 1, 0, 0} -> % Syn
+                            Decoded = #decoded{payload = Payload,  payload_size = PayloadSize, opt_decoded = Opt, source_address = Source_address, destination_address = Destination_address},
 			    StateNew1 = State#state{connection_worker_instance = State#state.connection_worker_instance + 1}, 	
 			    {ok, ConnectionWorkerPid} = stream_root_sup:start_worker(
 							  StateNew1#state.connection_worker_instance, 
-							  {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-							   {{Source_address, Sport}, {Destination_address, Dport}}, 
-							   DLT, Time, Len, Packet, PayloadSize=0}, 
-							  StateNew1#state.child_worker_pid_list), 
-			    AddressTuple = {{Source_address, Sport}, {Destination_address, Dport}},
+							  {_Direction = initiator, IP, TCP, Decoded},
+							  StateNew1#state.child_worker_pid_list),
 			    StateNew2 = StateNew1#state{connection_worker_pid_list = 
 							   insert_element(StateNew1#state.connection_worker_pid_list, {AddressTuple, ConnectionWorkerPid})};
 			_Other -> 
 			    %% drop packet, as it is out of band packet
+                            ?DEBUG("Dropping packet as out of band:{Ack:~p, Syn:~p, Fin:~p, _Rst:~p, SEG_SEQ:~p, SEG_ACK:~p, SEG_WND:~p, OPT:~p},~n
+                                     {{Sender_address:~p, Sender_port:~p},~n
+                                      {Receiver_address:~p, Receiver_port:~p}},~n
+                                      DLT:~p, Time:~p, Len:~p}~n", [TCP#tcp.ack, TCP#tcp.syn, TCP#tcp.fin, TCP#tcp.rst, TCP#tcp.seqno, TCP#tcp.ackno, TCP#tcp.win, Opt, Source_address, TCP#tcp.sport, 
+                                      Destination_address, TCP#tcp.dport, DLT, _Time, _Len]),
 			    StateNew2 = State
                     end;
 		false ->
                     StateNew2 = State,
+                    ?DEBUG("Dropping packet as checksum not ok: {Ack:~p, Syn:~p, Fin:~p, Rst:~p, SEG_SEQ:~p, SEG_ACK:~p, SEG_WND:~p, OPT:~p},~n
+                                     {{Sender_address:~p, Sender_port:~p},~n
+                                      {Receiver_address:~p, Receiver_port:~p}},~n
+                                      _DLT:~p, _Time:~p, _Len:~p}~n", [TCP#tcp.ack, TCP#tcp.syn, TCP#tcp.fin, TCP#tcp.rst, TCP#tcp.seqno, TCP#tcp.ackno, TCP#tcp.win, Opt, Source_address, TCP#tcp.sport, Destination_address, TCP#tcp.dport, DLT, _Time, _Len]),
 		    ok % ignore packet as checksum  not ok
 	    end;
 
-	{found, WorkerPid, _Any} ->
-	    %%Header = epcap_port_lib:header(TCP),
-	    %%{flags, Flags} = lists:keyfind(flags, 1, Header),
-	    %%Syn = lists:member(syn, Flags),
-	    %%Ack = lists:member(ack, Flags),
-	    %%Fin = lists:member(fin, Flags),
-	    %%Rst = lists:member(rst, Flags),
-            %%{seq, Seqno} = lists:keyfind(seq, 1, Header),
-            %%{ack, Ackno} = lists:keyfind(ack, 1, Header),
-            %%{win, Win} = lists:keyfind(win, 1, Header),
-            %%{opt, OptBinary} = lists:keyfind(opt, 1, Header),
-            %%Opt = pkt_tcp:options(OptBinary),
+	{found, Direction, WorkerPid, _Any} ->
+            Opt = pkt_tcp:options(TCP#tcp.opt),
 	    PayloadSize = payloadsize(IP, TCP),
 	    Payload = <<PayloadPadded:PayloadSize/binary>>,
-	    %% io:format("WorkerPid: ~p, packet ~p~n", [WorkerPid, 
-	    %%			      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-            %%		       {{Source_address, Source_port}, {Destination_address, Destination_port}}, 
-	    %%		       DLT, Time, Len, Packet, PayloadLength}]),
 	    Chksum_ok = case IP of
 			    #ipv4{} ->
 				IPSum = pkt:makesum(IP),
@@ -296,18 +300,17 @@ handle_info({packet, DLT, Time, Len, Data}, State) ->
 				    [0,0] ->
 					true;
                                     [_,_] ->
-					io:format("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum~p, TCPSum~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
+					?DEBUG("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum: ~p, TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
 					false
 				end;
 			    #ipv6{} ->
 				true % checksum not implemented for ipv6 
-			end,	    
+			end,
 	    case Chksum_ok of
                 true -> 
-		    stream_worker:send_packet(WorkerPid, 
-					      {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-					       {{Source_address, Sport}, {Destination_address, Dport}}, 
-					       DLT, Time, Len, Packet, PayloadSize});
+		    Decoded = #decoded{payload = Payload,  payload_size = PayloadSize, opt_decoded = Opt, source_address = Source_address, destination_address = Destination_address},
+                    stream_worker:send_packet(WorkerPid, 
+					      {Direction, IP, TCP, Decoded});
 		false ->
 		    ok % ignore packet as checksum is not ok			
 	    end,
@@ -376,11 +379,11 @@ get_connection_worker_pid_by_address_tuple(
   [{{{Source_address, Source_port}, {Destination_address, Destination_port}}, Pid}|_AddressTupleElements], 
   {{Source_address, Source_port}, {Destination_address, Destination_port}}
  )->
-    {found, Pid, {{Source_address, Source_port}, {Destination_address, Destination_port}}};
+    {found, initiator, Pid, {{Source_address, Source_port}, {Destination_address, Destination_port}}};
 get_connection_worker_pid_by_address_tuple(
   [{{{Destination_address, Destination_port},{Source_address, Source_port}}, Pid}|_AddressTupleElements], 
   {{Source_address, Source_port}, {Destination_address, Destination_port}})->
-    {found, Pid, {{Destination_address, Destination_port},{Source_address, Source_port}}};
+    {found, responder, Pid, {{Destination_address, Destination_port},{Source_address, Source_port}}};
 get_connection_worker_pid_by_address_tuple(
   [_AddressTupleElement|AddressTupleElements], 
   AddressTuple

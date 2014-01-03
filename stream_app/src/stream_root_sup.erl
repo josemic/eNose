@@ -52,9 +52,7 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-start_worker(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-			{{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-			DLT, Time, Len, Packet, PayloadLength}, ChildWorkerList) ->
+start_worker(Instance, {Direction, IP, TCP, Decoded}, ChildWorkerList) ->
     Instance_s = integer_to_list(Instance),
     Ref_s = erlang:ref_to_list(make_ref()),                       
     %% Ref_s makes the instance unique after restart
@@ -62,10 +60,7 @@ start_worker(Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackn
     Name_s = ?MODULE_STRING ++ "_" ++ Instance_s ++ "_" ++ Ref_s,  
     Name = list_to_atom (Name_s),
     %% the name must be a unique atom
-    Stream_worker = {Name, {stream_worker, start_link, [Instance, {packet_with_addressing, {Ack, Syn, Fin, Rst, Seqno, Ackno, Win, Opt}, 
-								   {{Initiator_address, Initiator_port}, {Responder_address, Responder_port}}, 
-								   DLT, Time, Len, Packet, PayloadLength},ChildWorkerList]},
-		     temporary, 2000, worker, [stream_worker]},
+    Stream_worker = {Name, {stream_worker, start_link, [Instance, {Direction, IP, TCP, Decoded},ChildWorkerList]}, temporary, 2000, worker, [stream_worker]},
     {ok, Result} = supervisor:start_child(?SERVER, Stream_worker),
     io:format("Supervisor ~p start result: ~p~n", [?SERVER, Result]), 
     {ok, Result}.

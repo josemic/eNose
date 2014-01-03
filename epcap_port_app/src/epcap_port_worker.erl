@@ -28,7 +28,7 @@
 %% ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 %% POSSIBILITY OF SUCH DAMAGE.
 -module(epcap_port_worker).
-
+-include_lib("pkt/include/pkt.hrl").
 -behaviour(gen_server).
 %% API
 -export([start_link/2, register_child_worker_Pid/2, stop/1, unregister_worker/2, unregister_child_worker_Pid/2]).
@@ -45,6 +45,21 @@
 	 }).
 -define(SERVER, ?MODULE).
 
+%%-define(DEBUG_WORKER, true).
+
+-ifdef(DEBUG_WORKER).
+%%-define(GEN_FSM_OPTS, {debug, [trace, {log_to_file, "log/epcap_port/trace_worker_"++Name_s++".log"}]}).
+-define(GEN_FSM_OPTS, {debug, [{log_to_file, "log/epcap_port/trace_worker_"++Name_s++".log"}]}).
+%%-define(GEN_FSM_OPTS, {debug, [{install,{Dbg_fun,state}}]}).
+%%-define(GEN_FSM_OPTS, {debug, [{install,{Dbg_fun,state}}, {log_to_file, "log/epcap_port/trace_worker_"++Name_s++".log"}]}).
+%%-define(GEN_FSM_OPTS, {debug, [trace]}).
+-else.
+-define(GEN_FSM_OPTS, []).
+-endif.
+
+
+
+
 unregister_worker(EPCAP_worker_Pid, Rule_worker_Pid) ->
     gen_server:call(Rule_worker_Pid, {unregister_process, EPCAP_worker_Pid}).	
 
@@ -58,7 +73,7 @@ start_link(Instance, Options)-> %% when is_integer(Instance) and is_list(Interfa
     Name_s = ?MODULE_STRING ++ "_" ++ Instance_s ++ "_" ++ Ref_s ++ "_" ++ lists:flatten(io_lib:format("~p",[now()])) ++ lists:flatten(io_lib:format("~p", [OptionsSorted])),
     Name = list_to_atom (Name_s),
     error_logger:info_report("gen_server:start_link(~p)~n",[[{local, Name},?MODULE,[],[],self()]]),
-    gen_server:start_link({local,Name},?MODULE,[Instance, OptionsSorted],[]).
+    gen_server:start_link({local,Name},?MODULE,[Instance, OptionsSorted],[?GEN_FSM_OPTS]).
 						%gen_server:start_link(?MODULE,[Instance, OptionsSorted],[]).
 
 register_child_worker_Pid(WorkerPid,ChildWorkerPid) ->
@@ -226,6 +241,35 @@ send_messages([], _Data) ->
     ok;
 send_messages([Pid|Pid_list], Data) ->
     Pid ! binary_to_term(Data),
+    %%io:format("~nCaptured: ~p~n",[binary_to_term(Data)]),
+    %%{packet, DLT, Time, Len, DataDecoded} = binary_to_term(Data),
+    %%Packet = pkt:decode(pkt:dlt(DLT), DataDecoded),
+    %%io:format("~nDecoded: ~w~n",[Packet]),
+    %%{ok,{[_EtherIgnore, IP, TCP], _PayloadPadded}} = Packet,
+    %%{Saddr, Daddr, _Proto} = case IP of
+    %%				 #ipv4{saddr = S, daddr = D, p = P} ->
+    %%				     {S,D,P};
+    %%
+    %%				 #ipv6{saddr = S, daddr = D, next = P} ->
+    %%				     {S,D,P}
+    %%			     end,
+    %% Source_address = Saddr,
+    %Source_address = inet_parse:ntoa(Saddr),
+    %%Source_port = epcap_port_lib:port(sport, TCP),
+    %Destination_address = inet_parse:ntoa(Daddr),
+    %% Destination_address = Daddr,
+    %%Destination_port = epcap_port_lib:port(dport, TCP),
+    %%#tcp{sport = Sport, dport = Dport, ackno = Ackno, seqno = Seqno,
+    %%     win = Win, cwr = _CWR, ece = _ECE, urg = _URG, ack = ACK, psh = _PSH,
+    %%     rst = RST, syn = SYN, fin = FIN, opt = OptBinary} = TCP,
+    %%    io:format("Value:{Ack:~p, Syn:~p, Fin:~p, _Rst:~p, SEG_SEQ:~p, SEG_ACK:~p, SEG_WND:~p},~n
+    %%    {{Sender_address:~p, Sender_port:~p},~n
+    %%    {Receiver_address:~p, Receiver_port:~p}},~n
+    %%     _DLT:~p, _Time:~p, _Len:~p}~n", [ACK, SYN, FIN, RST, Seqno, Ackno, Win, Source_address, Sport, 
+    %%    Destination_address, Dport, DLT, Time, Len]),
+        
+    %%Opt = pkt_tcp:options(OptBinary),
+    %%io:format("Value:Opt:~p~n", [Opt]),
     %%io:format("Sending message to PID_list~p, Pid~p~n",[[Pid|Pid_list],[Pid]]),
     send_messages(Pid_list, Data).
 

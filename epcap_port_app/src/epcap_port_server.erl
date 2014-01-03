@@ -41,6 +41,18 @@
 
 -define(SERVER, ?MODULE). 
 
+%%-define(DEBUG_SERVER, true).
+
+-ifdef(DEBUG_SERVER).
+%%-define(GEN_SERVER_OPTS, {debug, [trace, {log_to_file, "log/epcap_port/trace_server.log"}]}).
+-define(GEN_SERVER_OPTS, {debug, [{log_to_file, "log/epcap_port/trace_server.log"}]}).
+%%-define(GEN_SERVER_OPTS, {debug, [{install,{Dbg_fun,state}}]}).
+%%-define(GEN_SERVER_OPTS, {debug, [{install,{Dbg_fun,state}}, {log_to_file, "log/epcap_port/trace_server.log"}]}).
+%%-define(GEN_SERVER_OPTS, {debug, [trace]}).
+-else.
+-define(GEN_SERVER_OPTS, []).
+-endif.
+
 -record(state, {
 	  instance::integer(),
 	  package_worker_list::[tuple()]}).
@@ -57,7 +69,7 @@
 %% @end
 %%--------------------------------------------------------------------
 start_link() ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+    gen_server:start_link({local, ?SERVER}, ?MODULE, [], [?GEN_SERVER_OPTS]).
 
 start_worker(OptionTupleList) ->
     gen_server:call(?MODULE, {start_worker, OptionTupleList}).

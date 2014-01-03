@@ -1,11 +1,13 @@
 -module(s12).
 
 %% API
--export([s/0]).
-s()->
-    %% test case:
-    %% start 2 rules
+-export([s/1]).
 
+s([Interface]) when is_atom(Interface)->
+   io:format("Interface:~p~n ", [Interface]), 
+   s(atom_to_list(Interface));
+
+s(Interface) when is_list(Interface)->
     application:start(sasl),
     %%error_logger:logfile({open, "logfile.txt"}), 
     error_logger:tty(false), 
@@ -35,6 +37,6 @@ s()->
 				Other -> Other % found
 			end
                 end,
-    {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}, {filter, "tcp"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubunt* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
+    {ok, Result1} = rule:start([{epcap_port,[{interface, Interface}, {filter, "tcp"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubunt* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
     io:format("Start result 1: ~p~n",[Result1]).
 
