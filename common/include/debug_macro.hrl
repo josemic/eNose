@@ -7,10 +7,10 @@
 %%% Created : 30 Dec 2013 by michael <michael@donald>
 %%%-------------------------------------------------------------------
 
--define(debug, true).
+%%-define(debug, true).
 -ifdef(debug).
 -define(DEBUG(Format, Args),
-  io:format("~s.~w: DEBUG: " ++ Format, [ ?MODULE, ?LINE | Args])).
+  lager:info("~s.~w: \n" ++ Format, [ ?MODULE, ?LINE | Args])).
 -else.
 -define(DEBUG(Format, Args), true).
 -endif.
