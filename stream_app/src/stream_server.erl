@@ -31,8 +31,8 @@
 
 -behaviour(gen_server).
 -include_lib("pkt/include/pkt.hrl").
--include("debug_macro.hrl").
--include("decoded.hrl").
+-include("../../common/include/debug_macro.hrl").
+-include("../../common/include/decoded.hrl").
 
 %% API
 -export([start_link/0, start_worker/2, stop_worker/1, remove_connection_worker_by_pid/1, rule_element_register/3, 
@@ -44,7 +44,7 @@
 
 -define(SERVER, ?MODULE). 
 
--define(DEBUG_SERVER, true).
+%%-define(DEBUG_SERVER, true).
 
 -ifdef(DEBUG_SERVER).
 %%-define(GEN_FSM_OPTS, {debug, [trace, {log_to_file, "log/stream/trace_server.log"}]}).
