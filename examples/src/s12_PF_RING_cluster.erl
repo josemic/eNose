@@ -35,9 +35,10 @@ s(Interface, Cluster_ID) when is_list(Interface) and is_integer(Cluster_ID)->
 			R = binary:matches(Payload, Pattern, []),                  
                         case R of
 				[] -> fail; % not found
-				Other -> Other % found
+				Other -> 
+                                       {found, Other}
 			end
                 end,
-    {ok, Result1} = rule:start([{epcap_port,[{interface, Interface}, {cluster_id, Cluster_ID}, {filter, "tcp"}, {group, "root"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubunt* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
+    {ok, Result1} = rule:start([{epcap_port,[{interface, Interface}, {cluster_id, Cluster_ID}, {filter, "tcp"}, {group, "michael"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubunt* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
     io:format("Start result 1: ~p~n",[Result1]).
 

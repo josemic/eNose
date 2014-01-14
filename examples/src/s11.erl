@@ -30,7 +30,8 @@ s()->
 			R = ahocorasick:find(GotoDictNew, FailDict, OutputDictNew, Payload),                  
                         case R of
 				[] -> fail; % not found
-				Other -> Other % found
+				Other -> 
+                                       {found, Other}
 			end
                 end,
     {ok, Result1} = rule:start([{epcap_port,[{interface, "eth0"}, {filter, "tcp"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema*"}]}]),
