@@ -37,6 +37,6 @@ s(Filename) when is_list(Filename)->
 				Other -> Other % found
 			end
                 end,
-    {ok, Result1} = rule:start([{epcap_port,[{file, Filename}, {verbose, 0},{filter, "tcp"}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubuntu* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
+    {ok, Result1} = rule:start([{epcap_port,[{file, Filename}, {verbose, 0},{filter, "tcp"}, {promiscuous, true}]}, {stream, []}, {content, [{matchfun, MatchFun1}, {message, "Found: *meldung* oder *thema* oder * Ubuntu* oder <<16#0b, 16#07, 16#69, 16#72, 16#8b, 16#00, 16#d0, 16#28, 16#a9, 16#4b>>"}]}]),
     io:format("Start result 1: ~p~n",[Result1]).
 
