@@ -253,7 +253,7 @@ send_messages([Pid|Pid_list], Data) ->
     				 #ipv6{saddr = S, daddr = D, next = P} ->
     				     {S,D,P}
     			     end,
-                %%debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded, Pid, Pid_list),
+                debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded, Pid, Pid_list),
                 send_messages(Pid_list, Data);
           {epcap,eof} ->
                 lager:notice("Last packet from file received")
@@ -266,10 +266,10 @@ debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded,Pid, Pid_list) ->
     #tcp{sport = Sport, dport = Dport, ackno = Ackno, seqno = Seqno,
          win = Win, cwr = _CWR, ece = _ECE, urg = _URG, ack = ACK, psh = _PSH,
          rst = RST, syn = SYN, fin = FIN, opt = OptBinary} = TCP,
-        lager:debug("Value:{Ack:~p, Syn:~p, Fin:~p, _Rst:~p, SEG_SEQ:~p, SEG_ACK:~p, SEG_WND:~p},~n
+        lager:debug("Value:{Ack:~p, Syn:~p, Fin:~p, _Rst:~p, SEG_SEQ:~p:~p, SEG_ACK:~p, SEG_WND:~p},~n
         {{Sender_address:~p, Sender_port:~p},~n
         {Receiver_address:~p, Receiver_port:~p}},~n
-         _DLT:~p, _Time:~p, _Len:~p}~n", [ACK, SYN, FIN, RST, Seqno, Ackno, Win, Source_address, TCP#tcp.sport, 
+         _DLT:~p, _Time:~p, _Len:~p}~n", [ACK, SYN, FIN, RST, Seqno, Seqno+Len, Ackno, Win, Source_address, TCP#tcp.sport, 
         Destination_address, TCP#tcp.dport, DLT, Time, Len]),
         
     Opt = pkt_tcp:options(OptBinary),
