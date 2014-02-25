@@ -243,7 +243,7 @@ handle_info({packet, DLT, _Time, _Len, Data}, State) ->
 						    AddressTuple = {{Source_address, TCP#tcp.sport},{Destination_address, TCP#tcp.dport}}) of
 	{not_found, _AddressTuple} ->
             PayloadSize = payloadsize(IP, TCP),
-            Payload = <<PayloadPadded:PayloadSize/binary>>,
+	    <<Payload:PayloadSize/binary, Rest1/binary>> = <<PayloadPadded/binary>>,
 	    Chksum_ok = case IP of
 			    #ipv4{} ->
 				IPSum = pkt:makesum(IP),
@@ -291,7 +291,7 @@ handle_info({packet, DLT, _Time, _Len, Data}, State) ->
 	{found, Direction, WorkerPid, _Any} ->
             Opt = pkt_tcp:options(TCP#tcp.opt),
 	    PayloadSize = payloadsize(IP, TCP),
-	    Payload = <<PayloadPadded:PayloadSize/binary>>,
+	    <<Payload:PayloadSize/binary, Rest2/binary>> = <<PayloadPadded/binary>>,
 	    Chksum_ok = case IP of
 			    #ipv4{} ->
 				IPSum = pkt:makesum(IP),
