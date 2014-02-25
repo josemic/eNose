@@ -34,9 +34,11 @@
 -include_lib("pkt/include/pkt.hrl").
 -include("../../common/include/debug_macro.hrl").
 -include("../../common/include/decoded.hrl").
+-include("../include/stream_lib.hrl").
 
 %% API
--export([compare32/2, start_link/3, modulo32bit/1, send_packet/2, stop/1, smaller32/2, smaller_or_equal32/2]).
+-export([start_link/3, modulo32bit/1, send_packet/2, stop/1, smaller32/2, smaller_or_equal32/2,          
+         acknowledgePayloadReceptionBuffer/7, checkSAckReceptionBuffer/9]).
 
 %% gen_fsm callbacks
 -export([
@@ -54,7 +56,8 @@
 	 handle_sync_event/4,
 	 handle_info/3,
 	 terminate/3,
-	 code_change/4]).
+	 code_change/4 
+	]).
 
 -define(SERVER, ?MODULE).
 -define(MaxNumberOfSynSegSeqOnStack, 10).
@@ -89,7 +92,7 @@
 	  instance::integer(),
 	  syn_ack_received::boolean(),
 	  fin_ack_received::boolean(),
-          overlapping_payload_strategy::atom(), % first_wins or last_wins
+          overlapping_payload_strategy::atom(), % always_favour_old_data or favour_new_data_for_forward_overlap
 	  initiator_address::[tuple],
           initiator_port::[tuple],
           initiator_RCV_NXT::integer(),
@@ -104,8 +107,8 @@
           responder_RCV_WND_SCALE::integer(),
 	  close_initiator::atom(),
           close_responder::atom(),
-          initiator_payload_store::queue(),
-          responder_payload_store::queue(),
+          initiator_payload_store::stream_lib:new(),
+          responder_payload_store::stream_lib:new(),
           initiator_ack_payload_store::binary(),
           responder_ack_payload_store::binary(),
           initiator_sack_permitted::binary(),
@@ -197,7 +200,7 @@ init([Instance,{Direction=initiator, IP, TCP, Decoded}, ChildWorkerList]) ->
                sent_packets =0,
                sent_bytes = 0,
 	       instance = Instance,
-               overlapping_payload_strategy = last_wins,
+               overlapping_payload_strategy = always_favour_old_data, % always_favour_old_data or favour_new_data_for_forward_overlap
 	       close_initiator = undefined,
                close_responder = undefined,
 	       child_worker_list = ChildWorkerList,
@@ -337,7 +340,7 @@ state_syn_sent(
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_listen, {Direction, IP, TCP, Decoded}, State),
     {next_state, NextStateName, StateNew, Timeout}.
 
-state_syn_syn_ack_sent(
+state_syn_syn_ack_sent( % unclear, whether this is needed
   {Direction = initiator, 
    IP, 
    #tcp{ack=1, syn=0, fin=0, rst=0}=TCP, 
@@ -349,7 +352,16 @@ state_syn_syn_ack_sent(
 state_syn_syn_ack_sent(  
   {Direction = responder, 
    IP, 
-   #tcp{ack=1, syn=0, fin=0, rst=0}=TCP, % Ack retransmission
+   #tcp{ack=1, syn=1, fin=0, rst=0}=TCP, % Ack retransmission
+   #decoded{payload_size = 0} = Decoded
+  }, State) -> 
+    {ok, Timeout, StateNew}= handle_retransmission(NextStateName = ?current_function_name(), {Direction, IP, TCP, Decoded}, State),
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_syn_syn_ack_sent(  
+  {Direction = responder, 
+   IP, 
+   #tcp{ack=1, syn=0, fin=0, rst=0}=TCP, % Syn-Ack retransmission
    #decoded{payload_size = 0} = Decoded
   }, State) -> 
     {ok, Timeout, StateNew}= handle_retransmission(NextStateName = ?current_function_name(), {Direction, IP, TCP, Decoded}, State),
@@ -482,14 +494,14 @@ state_fin_wait_1( % Ack
    Decoded
   }, State) when 
       Direction == State#state.close_responder -> 
-    {ok, NextStateName, Timeout, StateNew }= handle_payload(?current_function_name(), state_fin_wait_1, {Direction, IP, TCP, Decoded}, State),
+    {ok, NextStateName, Timeout, StateNew }= handle_payload(?current_function_name(), state_fin_wait_2, {Direction, IP, TCP, Decoded}, State),
     {next_state, NextStateName, StateNew, Timeout};
 
-state_fin_wait_1( % Ack, payload_size == 0
+state_fin_wait_1( % Ack, payload optional; old data received, unclear whether this data should be just ignored.
   {Direction, % Close_initiator
    IP, 
    #tcp{ack=1, syn=0, fin=0, rst=0}=TCP, 
-   #decoded{payload_size = 0} = Decoded
+   Decoded
   }, State) when 
       Direction == State#state.close_initiator -> 
     {ok, NextStateName, Timeout, StateNew }= handle_payload(?current_function_name(), state_fin_wait_1, {Direction, IP, TCP, Decoded}, State),
@@ -503,7 +515,7 @@ state_fin_wait_1( % Fin, optional payload
   }, State) when 
       Direction == State#state.close_responder,
       State#state.fin_ack_received == true -> % when Ack for Fin has been received before
-    {ok, NextStateName, Timeout, StateNew }= handle_payload(?current_function_name(), state_closing, {Direction, IP, TCP, Decoded}, State),
+    {ok, NextStateName, Timeout, StateNew }= handle_payload(?current_function_name(), state_closing_ack, {Direction, IP, TCP, Decoded}, State),
     {next_state, NextStateName, StateNew, Timeout};
 
 state_fin_wait_1( % Rst
@@ -513,7 +525,7 @@ state_fin_wait_1( % Rst
    Decoded
   }, State) when 
       Direction == State#state.close_responder -> 
-    {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_closing, {Direction, IP, TCP, Decoded}, State),
+    {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
     {next_state, NextStateName, StateNew, Timeout};
 
 state_fin_wait_1( % Rst by connection close initiator 
@@ -596,13 +608,32 @@ state_fin_wait_2( % Rst by connection close responder
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
     {next_state, NextStateName, StateNew, Timeout}.
 
-state_closing(
-  {Direction, % Ack
+state_closing_ack(
+  {Direction, % Ack from close initiator
    IP, 
    #tcp{ack=1, syn=0, fin=0, rst=0}=TCP, 
    Decoded
   }, State) when
       Direction == State#state.close_initiator -> 
+    {ok, NextStateName, Timeout, StateNew }= handle_payload(?current_function_name(), state_closing, {Direction, IP, TCP, Decoded}, State),
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_closing_ack( % Rst
+  {Direction, % initiator or responder 
+   IP, 
+   #tcp{rst=1}=TCP, 
+   Decoded
+  }, State) -> 
+    {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
+    {next_state, NextStateName, StateNew, Timeout}.
+
+state_closing(
+  {Direction, % Ack from close responder
+   IP, 
+   #tcp{ack=1, syn=0, fin=0, rst=0}=TCP, 
+   Decoded
+  }, State) when
+      Direction == State#state.close_responder -> 
     {ok, NextStateName, Timeout, StateNew }= handle_payload(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
     {next_state, NextStateName, StateNew, Timeout};
 
@@ -673,7 +704,7 @@ state_time_wait( % Rst
     {next_state, NextStateName, StateNew, Timeout};
 
 state_time_wait(timeout, State) ->
-    lager:info("Closing Instance: ~p in state: ~p~n, sent_packets: ~p, sent_bytes: ~p~n", [State#state.instance, ?current_function_name(), State#state.sent_packets, State#state.sent_bytes]),
+    lager:info("Closing Instance: ~p in state: ~p, sent_packets: ~p, sent_bytes: ~p~n", [State#state.instance, ?current_function_name(), State#state.sent_packets, State#state.sent_bytes]),
     StateNew = State, 
     {stop, shutdown, StateNew}.
 
@@ -812,7 +843,10 @@ sequence_no_in_window(_SEG_SEQ, undefined, _RCV_WND, 0) ->
     true;
 
 sequence_no_in_window(SEG_SEQ, RCV_NXT, 0, 0) ->
-    modulo32bit(SEG_SEQ) == modulo32bit(RCV_NXT);
+    (modulo32bit(SEG_SEQ) == modulo32bit(RCV_NXT));
+
+sequence_no_in_window(SEG_SEQ, RCV_NXT, 0, 0) -> %% handle Windows bug
+    (modulo32bit(SEG_SEQ) == modulo32bit(RCV_NXT -1));
 
 sequence_no_in_window(SEG_SEQ, RCV_NXT, RCV_WND, 0) ->
     (smaller_or_equal32(RCV_NXT, SEG_SEQ) and smaller32(SEG_SEQ, modulo32bit(RCV_NXT + RCV_WND)));
@@ -821,47 +855,21 @@ sequence_no_in_window(SEG_SEQ, RCV_NXT, RCV_WND, SEG_LEN) ->
     (smaller_or_equal32(RCV_NXT, SEG_SEQ) and smaller32(SEG_SEQ, modulo32bit(RCV_NXT + RCV_WND)))
 	or (smaller_or_equal32(RCV_NXT, modulo32bit(SEG_SEQ + SEG_LEN -1)) and smaller32((modulo32bit(SEG_SEQ + SEG_LEN -1)), modulo32bit(RCV_NXT + RCV_WND))).
 
-%% See RFC 1982 for Serial Number Arithmetic 
-
-compare32(I1, I2) ->
-    C1 = I1 band 16#FFFFFFFF,
-    C2 = I2 band 16#FFFFFFFF,
-    compareMod32(C1, C2).
-
-compareMod32(I1, I2) when I1 == I2 ->
-    equal;
-
-compareMod32(I1, I2) when (I1 < I2) and ((I2 - I1) < 16#80000000) ->
-    less;
-
-compareMod32(I1, I2) when (I1 > I2) and ((I1 - I2) > 16#80000000) ->
-    less;
-
-compareMod32(I1, I2) when (I1 < I2) and ((I2 - I1) > 16#80000000) ->
-    greater;
-
-compareMod32(I1, I2) when (I1 > I2) and ((I1 - I2) < 16#80000000) ->
-    greater;
-
-compareMod32(_I1, _I2) ->
-    undef.
-
-
 smaller32(I1, I2) ->
-    case compare32(I1, I2) of
-	equal   -> false;
-	less    -> true;
-	greater -> false;
+    case stream_lib:compare_32(I1, I2) of
+	'=='   -> false;
+	'<'    -> true;
+	'>' -> false;
 	undef   -> false
     end.	
 
 
 
 smaller_or_equal32(I1, I2) ->
-    case compare32(I1, I2) of
-	equal   -> true;
-	less    -> true;
-	greater -> false;
+    case stream_lib:compare_32(I1, I2) of
+	'=='   -> true;
+	'<'    -> true;
+	'>' -> false;
 	undef   -> false
     end.
 
@@ -991,14 +999,29 @@ storeState_Payload(_Direction=responder, State, _SEG_SEQ, 0 =_Payload_size, <<>>
 storeState_Payload(_Direction=initiator, State, SEG_SEQ, Payload_size, Payload) ->
     StateNew1 = State#state{initiator_retransmission_index = determine_retransmission_index(SEG_SEQ, State#state.initiator_last_SEG_SEQ, State#state.initiator_retransmission_index)},
     StateNew  = StateNew1#state{initiator_payload_store = 
-				    queue:in({SEG_SEQ, StateNew1#state.initiator_retransmission_index, Payload_size, Payload}, StateNew1#state.initiator_payload_store), initiator_last_SEG_SEQ = SEG_SEQ},
+				    stream_lib:insert(#packet{seg_seq=SEG_SEQ, 
+							      payload_size=Payload_size, 
+							      payload=Payload, 
+							      retransmission_index=StateNew1#state.initiator_retransmission_index}, 
+						      StateNew1#state.initiator_payload_store, 
+						      StateNew1#state.overlapping_payload_strategy), 
+				initiator_last_SEG_SEQ = SEG_SEQ},
+    %%queue:in({SEG_SEQ, StateNew1#state.initiator_retransmission_index, Payload_size, Payload}, StateNew1#state.initiator_payload_store)
+
     %%lager:debug("PayloadStore Direction ~p contains now ~p packages~n",[_Direction, length(StateNew#state.initiator_payload_store)]),
     StateNew;
 
 storeState_Payload(_Direction=responder, State, SEG_SEQ, Payload_size, Payload) ->
     StateNew1 = State#state{responder_retransmission_index = determine_retransmission_index(SEG_SEQ, State#state.responder_last_SEG_SEQ, State#state.responder_retransmission_index)},
-    StateNew  = StateNew1#state{responder_payload_store = 
-				    queue:in({SEG_SEQ, StateNew1#state.responder_retransmission_index, Payload_size, Payload}, StateNew1#state.responder_payload_store), responder_last_SEG_SEQ = SEG_SEQ},
+    StateNew  = StateNew1#state{responder_payload_store =
+				    stream_lib:insert(#packet{seg_seq=SEG_SEQ, 
+							      payload_size=Payload_size, 
+							      payload=Payload, 
+							      retransmission_index=StateNew1#state.responder_retransmission_index}, 
+						      StateNew1#state.responder_payload_store, 
+						      StateNew1#state.overlapping_payload_strategy),
+				responder_last_SEG_SEQ = SEG_SEQ},
+    %%queue:in({SEG_SEQ, StateNew1#state.responder_retransmission_index, Payload_size, Payload}, StateNew1#state.responder_payload_store), 
     %%lager:debug("PayloadStore Direction ~p contains now ~p packages~n",[_Direction, length(StateNew#state.responder_payload_store)]),
     StateNew.
 
@@ -1099,39 +1122,76 @@ acknowledgePayloadReceptionBuffer(_Direction, false = _Ack, _SEG_ACK, _RCV_NXT, 
     {ok, _Acknowledged_Acc = [], Payload_queue}.
 
 acknowledgePayloadReceptionBuffer(_Direction, true = Ack, SEG_ACK, RCV_NXT, Payload_queue, Acknowledged_Acc, Payload_queue_Acc) ->
-    %%QueueList = queue:to_list(Payload_queue),
-    %%Filter_binary_out_fun = fun({SEG_SEQ, Retransmission_Index, Payload_size, _Payload}) -> {SEG_SEQ, SEG_SEQ + Payload_size, Retransmission_Index, Payload_size} end,
-    %%Filtered_binary_out = lists:map(Filter_binary_out_fun, QueueList),
-    %%lager:debug("acknowledgePayloadReceptionBuffer: Bufferstate in Direction ~p has RCV_NXT: ~p, SEG_ACK: ~p and content: ~n~p~n", [_Direction, RCV_NXT, SEG_ACK, Filtered_binary_out]),
-    {QueueValue, Payload_queue_New} = queue:out(Payload_queue),
+
+   {Left, Right} = Payload_queue,
+   QueueList = lists:reverse(Left ++ Right),
+   Filter_binary_out_fun = fun(Packet) -> {Packet#packet.seg_seq, Packet#packet.seg_seq + Packet#packet.payload_size, Packet#packet.retransmission_index, Packet#packet.payload_size} end,
+   Filtered_binary_out = lists:map(Filter_binary_out_fun, QueueList),
+   lager:debug("acknowledgePayloadReceptionBuffer: Bufferstate in Direction ~p has RCV_NXT: ~p, SEG_ACK: ~p and content: ~n~p~n", [_Direction, RCV_NXT, SEG_ACK, Filtered_binary_out]),
+    SEG_ACK32 = modulo32bit(SEG_ACK),
+    RCV_NXT32 = modulo32bit(RCV_NXT),
+    {QueueValue, Payload_queue_New} = stream_lib:get_first_element(Payload_queue, SEG_ACK32, RCV_NXT32),
+    %%lager:debug("QueueValue: ~p, Payload_queue_New: ~p~n",[QueueValue, Payload_queue_New]),
     case QueueValue of
-	empty ->
-            %%lager:debug("acknowledgePayloadReceptionBuffer: Payloadstore in Direction ~p is empty~n", [_Direction]),
-	    {ok, lists:reverse(Acknowledged_Acc), Payload_queue_Acc};
-        {value, {SEG_SEQ, Retransmission_Index, Payload_size, Payload}} -> 
-	    RCV_NXT32 = modulo32bit(RCV_NXT),
-	    SEG_SEQ32 = modulo32bit(SEG_SEQ),
-	    SEG_ACK32 = modulo32bit(SEG_ACK),
-	    %% test SEG_SEQ32 =< RCV_NXT32 =< SEG_ACK is not ever assured, the acknowledgement may not acknowlege the latest packet
-	    %% test SEG_SEQ32 =< RCV_NXT32
-	    %% test SEG_SEQ32 =< SEG_ACK =< RCV_NXT32 + Window
-            case smaller_or_equal32(SEG_SEQ32 + Payload_size, SEG_ACK32) of 
-                true -> % packet has been acknowledged
-		    %% Put in acknowledgement buffer
-		    Acknowledged_AccNew = [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}| Acknowledged_Acc],
-		    acknowledgePayloadReceptionBuffer(_Direction, Ack, SEG_ACK, RCV_NXT, Payload_queue_New, Acknowledged_AccNew, Payload_queue_Acc);
-                false -> % packet has been not been acknowledged
-		    case smaller_or_equal32(RCV_NXT32, add_modulo_32bit(SEG_SEQ32, Payload_size)) of % check, if data has not already been received
-			true ->
-			    %% keep in queue
-			    Payload_queue_AccNew  = queue:in({SEG_SEQ, Retransmission_Index, Payload_size, Payload}, Payload_queue_Acc),
-			    acknowledgePayloadReceptionBuffer(_Direction, Ack, SEG_ACK, RCV_NXT, Payload_queue_New, Acknowledged_Acc, Payload_queue_AccNew);
-			false -> 
-			    %% remove from queue, as retransmission
-			    acknowledgePayloadReceptionBuffer(_Direction, Ack, SEG_ACK, RCV_NXT, Payload_queue_New, Acknowledged_Acc, Payload_queue_Acc)
-		    end
-            end
-    end.
+	    empty ->
+			       lager:debug("acknowledgePayloadReceptionBuffer: Payloadstore in Direction ~p is empty~n", [_Direction]),
+			       {ok, lists:reverse(Acknowledged_Acc), Payload_queue_New};
+            keep_buffer ->
+			       lager:debug("acknowledgePayloadReceptionBuffer: Payloadstore in Direction ~p is keep_buffer~n", [_Direction]),
+			       {ok, lists:reverse(Acknowledged_Acc), Payload_queue_New};
+	    {value, Element} ->
+                               lager:debug("acknowledgePayloadReceptionBuffer: Payloadstore in Direction ~p is {value, ~p}~n", [_Direction, Element]),
+			       SEG_SEQ = Element#packet.seg_seq,
+			       Retransmission_Index = Element#packet.retransmission_index,
+			       Payload_size = Element#packet.payload_size,
+			       Payload = Element#packet.payload,
+			       SEG_SEQ32 = modulo32bit(SEG_SEQ),
+			       %% test SEG_SEQ32 =< RCV_NXT32 =< SEG_ACK is not ever assured, the acknowledgement may not acknowlege the latest packet
+			       %% test SEG_SEQ32 =< RCV_NXT32
+			       %% test SEG_SEQ32 =< SEG_ACK =< RCV_NXT32 + Window
+			       case smaller_or_equal32(SEG_SEQ32 + Payload_size, SEG_ACK32) of 
+				   true -> % packet has been acknowledged
+				       %% Put in acknowledgement buffer
+				       Acknowledged_AccNew = [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}| Acknowledged_Acc],
+				       acknowledgePayloadReceptionBuffer(_Direction, Ack, SEG_ACK, add_modulo_32bit(RCV_NXT, Payload_size), Payload_queue_New, Acknowledged_AccNew, Payload_queue_Acc);
+				   false -> % packet has been not been acknowledged
+				       case smaller_or_equal32(RCV_NXT32, add_modulo_32bit(SEG_SEQ32, Payload_size)) of % check, if data has not already been received
+					   true ->
+      					       %% keep element in queue and stop here when found first element plus payload greater SEG_ACK
+					       {ok, lists:reverse(Acknowledged_Acc), Payload_queue};
+					   false -> 
+					       %% remove from queue, as retransmission
+					       acknowledgePayloadReceptionBuffer(_Direction, Ack, SEG_ACK, RCV_NXT, Payload_queue_New, Acknowledged_Acc, Payload_queue_Acc)
+				       end
+			       end;
+	    {lastInSEG_ACK, Element} ->
+                               lager:debug("acknowledgePayloadReceptionBuffer: Payloadstore in Direction ~p is {lastInSEG_ACK, Element}~n", [_Direction, Element]),
+			       SEG_SEQ = Element#packet.seg_seq,
+			       Retransmission_Index = Element#packet.retransmission_index,
+			       Payload_size = Element#packet.payload_size,
+			       Payload = Element#packet.payload,
+			       RCV_NXT32 = modulo32bit(RCV_NXT),
+			       SEG_SEQ32 = modulo32bit(SEG_SEQ),
+			       %% test SEG_SEQ32 =< RCV_NXT32 =< SEG_ACK is not ever assured, the acknowledgement may not acknowlege the latest packet
+			       %% test SEG_SEQ32 =< RCV_NXT32
+			       %% test SEG_SEQ32 =< SEG_ACK =< RCV_NXT32 + Window
+			       case smaller_or_equal32(SEG_SEQ32 + Payload_size, SEG_ACK32) of 
+				   true -> % packet has been acknowledged
+				       %% Put in acknowledgement buffer
+				       Acknowledged_AccNew = [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}| Acknowledged_Acc],
+      				       %% keep element in queue and stop here when found first element plus payload greater SEG_ACK
+				       {ok, lists:reverse(Acknowledged_AccNew), Payload_queue_New};
+				   false -> % packet has been not been acknowledged
+				       case smaller_or_equal32(RCV_NXT32, add_modulo_32bit(SEG_SEQ32, Payload_size)) of % check, if data has not already been received
+					   true ->
+      					       %% keep element in queue and stop here when found first element plus payload greater SEG_ACK
+					       {ok, lists:reverse(Acknowledged_Acc), Payload_queue};
+					   false -> 
+					       %% remove from queue, as retransmission
+					       acknowledgePayloadReceptionBuffer(_Direction, Ack, SEG_ACK, RCV_NXT, Payload_queue_New, Acknowledged_Acc, Payload_queue_Acc)
+				       end
+			       end
+		       end.
 
 checkSAckReceptionBuffer(_Direction, _Ack =false, _SEG_ACK, State) ->
     %%lager:debug("Received: Package with Ack = ~p in Direction ~p~n", [_Ack,_Direction]),
@@ -1157,13 +1217,14 @@ checkSAckReceptionBuffer(_Direction, _SEG_ACK, _Acc, run, _Overlapping_payload_s
     {ok, Sack_store, Ack_payload_store, RCV_NXT};
 
 checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, restart, Overlapping_payload_strategy, Sack_store, Ack_payload_store, RCV_NXT, Window) -> % restart with Acc added to Sack_store
+    %%lager:debug("Sack_store-restart:~p~n",[lists:reverse(Acc) ++ Sack_store]),
     checkSAckReceptionBuffer(Direction, SEG_ACK, [], run, Overlapping_payload_strategy, lists:reverse(Acc) ++ Sack_store, Ack_payload_store, RCV_NXT, Window);
 
 checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, run, Overlapping_payload_strategy, 
-			 [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}|SAck_store_Tail], Ack_payload_store, RCV_NXT, Window) ->
-    %%Filter_binary_out_fun = fun({FunSEG_SEQ, FunRetransmission_Index, FunPayloadLength, _FunPayload}) -> {FunSEG_SEQ, FunSEG_SEQ + FunPayloadLength, FunRetransmission_Index, FunPayloadLength} end,
-    %%Filtered_binary_out = lists:map(Filter_binary_out_fun, [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}|SAck_store_Tail]),
-    %%lager:debug("checkSAckReceptionBuffer: Bufferstate in Direction ~p has RCV_NXT:~p, SEG_ACK: ~p, Window: ~p and content: ~n~p~n", [Direction, RCV_NXT, SEG_ACK, Window, Filtered_binary_out]),
+			 [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}|SAck_store_Tail] = _Sack_store, Ack_payload_store, RCV_NXT, Window) ->
+    Filter_binary_out_fun = fun({FunSEG_SEQ, FunRetransmission_Index, FunPayloadLength, _FunPayload}) -> {FunSEG_SEQ, FunSEG_SEQ + FunPayloadLength, FunRetransmission_Index, FunPayloadLength} end,
+    Filtered_binary_out = lists:map(Filter_binary_out_fun, [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}|SAck_store_Tail]),
+    lager:debug("checkSAckReceptionBuffer: Bufferstate in Direction ~p has RCV_NXT:~p, SEG_ACK: ~p, Window: ~p and content: ~n~p~n", [Direction, RCV_NXT, SEG_ACK, Window, Filtered_binary_out]),
     RCV_NXT32 = modulo32bit(RCV_NXT),
     SEG_SEQ32 = modulo32bit(SEG_SEQ),
     SEG_ACK32 = modulo32bit(SEG_ACK),
@@ -1175,37 +1236,40 @@ checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, run, Overlapping_payload_strat
 	    RCV_NXT_plus_Window32 = add_modulo_32bit(RCV_NXT32, Window),
 	    case smaller_or_equal32(SEG_ACK32, RCV_NXT_plus_Window32) of
 		true -> % SEG_ACK =< RCV_NXT + Window
-		    case smaller32(RCV_NXT32, add_modulo_32bit(SEG_SEQ32, Payload_size)) of
+		    case smaller_or_equal32(RCV_NXT32, add_modulo_32bit(SEG_SEQ32, Payload_size)) of
                         true ->
                             case smaller32(RCV_NXT32, SEG_SEQ32) of
                                 true -> % keep in buffer
                                     Sack_storeNew = SAck_store_Tail,
                                     RCV_NXT_New = RCV_NXT,
                                     Ack_payload_storeNew = Ack_payload_store,
+                                    lager:debug("Acknowlegding payload: Ack_payload_store_size: ~p, Payload:~w ~n",[byte_size(Ack_payload_store), <<Payload/binary>>]),
                                     checkSAckReceptionBuffer(Direction, SEG_ACK, [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}|Acc],
                                                              run, Overlapping_payload_strategy, Sack_storeNew, Ack_payload_storeNew, RCV_NXT_New, Window);
                                 false -> % this is the next packet
-				    Delta_overlap_ignore = add_modulo_32bit(RCV_NXT32, -SEG_SEQ32),
+				    Delta_overlap = add_modulo_32bit(RCV_NXT32, -SEG_SEQ32),
 				    %% Consider overlapping payload strategy
          			    case Overlapping_payload_strategy of
-	        			last_wins ->
-		        		    Ack_payload_store_size = byte_size(Ack_payload_store),
-			        	    if 
-				        	Ack_payload_store_size > Delta_overlap_ignore -> 
-						    Ack_payload_storeNew = <<Ack_payload_store:(Ack_payload_store_size - Delta_overlap_ignore)/binary, Payload/binary>>;
-        	         			true ->
-			         		    <<_Ignore:Delta_overlap_ignore/binary, Payload_non_duplicate/binary>> = <<Payload/binary>>,
-				        	    Ack_payload_storeNew  = <<Ack_payload_store/binary, Payload_non_duplicate/binary>>
-				            end;
-               				first_wins ->
-		               		    <<_Ignore:Delta_overlap_ignore/binary, Payload_non_duplicate/binary>> = <<Payload/binary>>,
-				            Ack_payload_storeNew = <<Ack_payload_store/binary, Payload_non_duplicate/binary>>
-				    end,
-				    {ok, RCV_NXT_New} = determine_RCV_NXT(Direction, RCV_NXT, SEG_SEQ, Payload_size-Delta_overlap_ignore),
-	               		    Sack_storeNew = SAck_store_Tail,
-			            checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, restart, Overlapping_payload_strategy, Sack_storeNew, Ack_payload_storeNew, RCV_NXT_New, Window)
+	        			favour_new_data_for_forward_overlap ->
+		        		    <<_Ignore:Delta_overlap/binary, Payload_non_duplicate/binary>> = <<Payload/binary>>,
+				            Ack_payload_storeNew  = <<Ack_payload_store/binary, Payload_non_duplicate/binary>>,
+                                            lager:debug("Store Data: Ack_payload_store_size: ~p, Delta_overlap:~p, Payload:~w ~n",[byte_size(Ack_payload_store),Delta_overlap, byte_size(<<Payload/binary>>)]),
+				            {ok, RCV_NXT_New} = determine_RCV_NXT(Direction, RCV_NXT, SEG_SEQ+Delta_overlap, Payload_size-Delta_overlap),
+                                            Sack_storeNew = SAck_store_Tail,
+                                            checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, restart, Overlapping_payload_strategy, 
+                                                                     Sack_storeNew, Ack_payload_storeNew, RCV_NXT_New, Window);
+               				always_favour_old_data ->
+		               		    <<_Ignore:Delta_overlap/binary, Payload_non_duplicate/binary>> = <<Payload/binary>>,
+				            Ack_payload_storeNew = <<Ack_payload_store/binary, Payload_non_duplicate/binary>>,
+                                            lager:debug("Store Data: Ack_payload_store_size: ~p, Delta_overlap:~p, Payload:~w ~n",[byte_size(Ack_payload_store),Delta_overlap, byte_size(<<Payload/binary>>)]),
+				            {ok, RCV_NXT_New} = determine_RCV_NXT(Direction, RCV_NXT, SEG_SEQ+Delta_overlap, 
+                                                                                  Payload_size-Delta_overlap), 
+                                            Sack_storeNew = SAck_store_Tail,
+                                            checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, restart, Overlapping_payload_strategy, 
+                                                                     Sack_storeNew, Ack_payload_storeNew, RCV_NXT_New, Window)
+				    end
 			    end;
-			false -> % package SEG_SEQ + payload length is smaller than RCV_NXT
+			false -> % package SEG_SEQ + payload length is '<' than RCV_NXT
 			    %% drop packet from queue
                             lager:info("checkSAckReceptionBuffer: Dropping from buffer in Direction ~p has RCV_NXT:~p, SEG_ACK: ~p, Window: ~p and content: ~n~p~n", [Direction, RCV_NXT, SEG_ACK, Window, {SEG_SEQ, SEG_SEQ + Payload_size}]),
 			    Sack_storeNew = SAck_store_Tail,
@@ -1213,7 +1277,7 @@ checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, run, Overlapping_payload_strat
                             Ack_payload_storeNew = Ack_payload_store,
                             checkSAckReceptionBuffer(Direction, SEG_ACK, Acc, run, Overlapping_payload_strategy, Sack_storeNew, Ack_payload_storeNew, RCV_NXT_New, Window)
 		    end;
-		false -> % SEG_ACK > RCV_NXT + Window
+		false -> % SEG_ACK > RCV_NXT + Window % Bug: Acknowledgement out of Window results in endless loop
 		    %% Acknowledgement out of Window
 	            lager:warning("checkSAckReceptionBuffer: Acknowledgement out of Window, Direction:~p, SEG_SEQ32:~p:~p , SEG_ACK32:~p, RCV_NXT:~p, Window:~p~n", [Direction, SEG_SEQ32, SEG_SEQ32+Payload_size, SEG_ACK32, RCV_NXT, Window]),
 		    Sack_storeNew = [{SEG_SEQ, Retransmission_Index, Payload_size, Payload}|SAck_store_Tail],
@@ -1321,7 +1385,7 @@ handle_syn_ack_response_syn(Current_state_name, New_state_name, {Direction, _IP,
     {ok, NextStateName, Timeout, StateNew}.
 
 handle_syn_response_ack(Current_state_name, New_state_name, {Direction, _IP, TCP, Decoded}, State) ->
-    case stack_member(add_modulo_32bit((TCP#tcp.ack =:= 1), -1), State#state.initiator_syn_seg_seq_stack) of
+    case stack_member(add_modulo_32bit(TCP#tcp.ackno, -1), State#state.initiator_syn_seg_seq_stack) of
 	true ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, New_state_name, ack_in_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
             Payload = Decoded#decoded.payload,
@@ -1436,7 +1500,7 @@ handle_payload(Current_state_name, New_state_name, {Direction, _IP, TCP, Decoded
             NextStateName = New_state_name;
         false ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, Current_state_name, data_out_of_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
-	    lager:warning("Received packet  with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
+	    lager:warning("Received packet with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
             NextStateName = Current_state_name,
 	    StateNew  = StateNew0
     end, 
@@ -1455,7 +1519,7 @@ handle_reset(Current_state_name, New_state_name, {Direction, _IP, TCP, Decoded},
             StateNew  = StateNew1;
         false ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, Current_state_name, reset_out_of_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
-	    lager:warning("Received packet  with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
+	    lager:warning("Received packet with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
             Timeout = infinity,
             NextStateName = Current_state_name,
 	    StateNew  = StateNew0
@@ -1470,7 +1534,7 @@ handle_retransmission(Current_state_name, {Direction, _IP, TCP, Decoded}, State)
 	    StateNew  = StateNew0;
         false ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, Current_state_name, retransmission_out_of_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
-	    lager:warning("Received packet  with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
+	    lager:warning("Received packet with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
 	    StateNew  = StateNew0
     end, 
     NextStateName = Current_state_name,
@@ -1496,7 +1560,7 @@ handle_initial_fin(Current_state_name, New_state_name, {Direction, _IP, TCP, Dec
             NextStateName = New_state_name;
         false ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, Current_state_name, data_out_of_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
-	    lager:warning("Received packet  with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
+	    lager:warning("Received packet with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
             NextStateName = Current_state_name,
             StateNew7  = StateNew0
     end, 
@@ -1512,7 +1576,7 @@ handle_ignore(Current_state_name, {Direction, _IP, TCP, Decoded}, State) -> % pa
 	    StateNew  = StateNew0;
         false ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, Current_state_name, ignore_out_of_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
-	    lager:warning("Received packet  with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
+	    lager:warning("Received packet with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
 	    StateNew  = StateNew0
     end, 
     NextStateName = Current_state_name,
