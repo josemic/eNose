@@ -27,11 +27,11 @@
 %% LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 %% ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 %% POSSIBILITY OF SUCH DAMAGE.
--module(epcap_port_root_sup).
+-module(stream_root_sup).
 
 -behaviour(supervisor).
 %% API
--export([start_link/0, start_worker/2, stop_worker/2]).
+-export([start_link/0, start_worker/3, stop_worker/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -52,7 +52,7 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-start_worker(Instance, Options) ->
+start_worker(Instance, {Direction, IP, TCP, Decoded}, ChildWorkerList) ->
     Instance_s = integer_to_list(Instance),
     Ref_s = erlang:ref_to_list(make_ref()),                       
     %% Ref_s makes the instance unique after restart
@@ -60,23 +60,16 @@ start_worker(Instance, Options) ->
     Name_s = ?MODULE_STRING ++ "_" ++ Instance_s ++ "_" ++ Ref_s,  
     Name = list_to_atom (Name_s),
     %% the name must be a unique atom
-    EPCAP_port_worker = {Name, {epcap_port_worker, start_link, [Instance, Options]},
-		    temporary, 2000, worker, [epcap_port_worker]},
-    {ok, Result} = supervisor:start_child(?SERVER, EPCAP_port_worker),
+    Stream_worker = {Name, {stream_worker, start_link, [Instance, {Direction, IP, TCP, Decoded},ChildWorkerList]}, temporary, 2000, worker, [stream_worker]},
+    {ok, Result} = supervisor:start_child(?SERVER, Stream_worker),
     io:format("Supervisor ~p start result: ~p~n", [?SERVER, Result]), 
     {ok, Result}.
 
-stop_worker(WorkerPid, ChildWorkerPid) ->
-%%Result = supervisor:terminate_child(?SERVER, WorkerPid), 
-%%io:format("Supervisor stopping Pid ~p with result~p~n", [WorkerPid, Result]), 
-%%Result.
-    Res = epcap_port_worker:unregister_child_worker_Pid(WorkerPid,ChildWorkerPid),
-    case Res of
-	no_children_left ->
-	    epcap_port_worker:stop(WorkerPid);
-	children_left ->
-	    children_left % do nothing
-    end.
+stop_worker(ConnectionWorkerPid) ->
+    %%Result = supervisor:terminate_child(?SERVER, WorkerPid), 
+    %%io:format("Supervisor stopping Pid ~p with result~p~n", [WorkerPid, Result]), 
+    %%Result.
+    stream_worker:stop(ConnectionWorkerPid).
 %%gen_server:call(WorkerPid, stop_worker).
 
 %%%===================================================================
@@ -102,10 +95,10 @@ init([]) ->
     MaxSecondsBetweenRestarts = 60,
 
     SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
-    EPCAP_port_server = {{local, epcap_port_server}, {epcap_port_server, start_link, []},
-		    permanent, 2000, worker, [epcap_port_server]},
+    Stream_server = {{local, stream_server}, {stream_server, start_link, []},
+		     permanent, 2000, worker, [stream_server]},
 
-    {ok, {SupFlags, [EPCAP_port_server]}}.
+    {ok, {SupFlags, [Stream_server]}}.
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================

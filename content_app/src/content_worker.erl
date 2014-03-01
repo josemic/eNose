@@ -42,6 +42,8 @@
 -define(SERVER, ?MODULE). 
 
 -record(state, {
+	  received_packets::integer(),
+	  received_bytes::integer(),
 	  epcap_worker_pid::pid(),
 	  instance::integer(),
 	  matchfun::function(), 
@@ -72,7 +74,7 @@ start_link(Instance, OptionList)-> %% when is_integer(Instance) and is_list(Inte
 						%Name_s = ?MODULE_STRING ++ "_" ++ Instance_s ++ "_" ++ Ref_s ++ lists:flatten(io_lib:format("~p", [OptionListSorted])),
     Name_s = ?MODULE_STRING ++ "_" ++ Instance_s ++ "_" ++ Ref_s ++ "_" ++ lists:flatten(io_lib:format("~p",[now()])) ++ "_" ++ lists:flatten(io_lib:format("~p", [OptionListSorted])),
     Name = list_to_atom (Name_s),
-    error_logger:info_report("gen_server:start_link(~p)~n",[[{local, Name},?MODULE,[],[],self()]]),
+    lager:notice("gen_server:start_link(~p)~n",[[{local, Name},?MODULE,[],[],self()]]),
     gen_server:start_link({local,Name},?MODULE,[Instance, OptionList],[]).
 %%gen_server:start_link(?MODULE,[Instance, OptionList],[]).
 
@@ -96,7 +98,7 @@ stop(WorkerPid) ->
 %% @end
 %%--------------------------------------------------------------------
 init([Instance, OptionElementSorted]) ->    
-    State = #state{instance=Instance, option_element_sorted = OptionElementSorted},
+    State = #state{received_packets = 0, received_bytes = 0, instance=Instance, option_element_sorted = OptionElementSorted},
     case lists:keyfind(matchfun, 1, OptionElementSorted) of
 	{matchfun, MatchFun} -> 
 	    NewState1 = State#state{matchfun = MatchFun}, 
@@ -105,12 +107,12 @@ init([Instance, OptionElementSorted]) ->
 		    NewState2 = NewState1#state{message=Message}, 
 		    Res = {ok, NewState2};
 		false -> 
-		    io:format("Message not given!!~n",[]),
+		    lager:error("Message not given!!~n",[]),
 		    Res = {stop, message_not_given}
 	    end;
 
 	false -> 
-	    io:format("MatchFun not found!!~n",[]),
+	    lager:error("MatchFun not found!!~n",[]),
 	    State =  #state{instance=Instance, matchfun = undefined, 
 			    option_element_sorted = OptionElementSorted},
 	    Res = {stop, matchfun_not_found}
@@ -132,7 +134,19 @@ init([Instance, OptionElementSorted]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call({payload_section, Saddr, Sport, Daddr, Dport, Payload}, _From, State) ->
+    Proto = tcp,
+    Matchfun = State#state.matchfun,
+    case (Matchfun(Payload)) of
+	fail ->
+	    ok;
+	{found, StartLengthList}     ->
+            ok = print_result(StartLengthList, Payload, Saddr,Sport, Daddr, Dport, Proto, State)
 
+    end,
+    StateNew = State#state{received_packets= State#state.received_packets+1, received_bytes= State#state.received_bytes + byte_size(Payload)},
+    Reply = ok,
+    {reply, Reply, StateNew};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 handle_call(_Request, _From, State) ->
@@ -165,7 +179,6 @@ handle_cast(_Msg, State) ->
 
 handle_info({packet, DLT, Time, Len, Packet}, State) ->
     [Ether, IP, Hdr, Payload] = epcap_port_lib:decode(pkt:link_type(DLT), Packet),
-
     {Saddr, Daddr, Proto} = case IP of
 				#ipv4{saddr = S, daddr = D, p = P} ->
 				    {S,D,P};
@@ -177,34 +190,26 @@ handle_info({packet, DLT, Time, Len, Packet}, State) ->
     case (Matchfun(Payload)) of
 	fail ->
 	    ok;
-	_     ->
-	    error_logger:info_msg("Logging: Instance: ~p, PID: ~p, at ~p~n",[State#state.instance, self(),epcap_port_lib:timestamp(Time)]),
-	    error_logger:info_msg("Message: ~p~n",[State#state.message]),
-	    error_logger:info_report([
-				      self(),	   
-				      {time, epcap_port_lib:timestamp(Time)},
-				      {caplen, byte_size(Packet)},
-				      {len, Len},
-				      {datalink, pkt:link_type(DLT)},
-
-						% Source
-				      {source_macaddr, string:join(epcap_port_lib:ether_addr(Ether#ether.shost), ":")},
-				      {source_address, inet_parse:ntoa(Saddr)},
-				      {source_port, epcap_port_lib:port(sport, Hdr)},
-
-						% Destination
-				      {destination_macaddr, string:join(epcap_port_lib:ether_addr(Ether#ether.dhost), ":")},
-				      {destination_address, inet_parse:ntoa(Daddr)},
-				      {destination_port, epcap_port_lib:port(dport, Hdr)},
-
-				      {protocol, pkt:proto(Proto)},
-				      {protocol_header, epcap_port_lib:header(Hdr)},
-
-				      {payload_bytes, byte_size(Payload)},
-				      {payload, epcap_port_lib:payload(Payload)}
-				     ])
+        Found ->
+	    lager:notice("Logging: Instance: ~p, PID: ~p, at ~p~n",[State#state.instance, self(),epcap_port_lib:timestamp(Time)]),
+	    lager:notice("Message: ~p, ~n~nPattern found: ~p~n",[State#state.message, Found]),
+	    lager:notice("Received packages: ~p, Received bytes: ~p~n",[State#state.received_packets, State#state.received_bytes]),
+	    lager:notice("Self: ~p~n",[self()]), 
+            lager:notice("time: ~p~n",[epcap_port_lib:timestamp(Time)]),
+	    lager:notice("caplen: ~p~n",[byte_size(Packet)]), 
+	    lager:notice("len: ~p~n",[Len]),
+	    lager:notice("datalink: ~p~n",[pkt:link_type(DLT)]),
+            lager:notice("source_address: ~p~n", [inet_parse:ntoa(Saddr)]), 
+	    lager:notice("source_port: ~p~n",[string:join(epcap_port_lib:ether_addr(Ether#ether.shost), ":")]),
+            lager:notice("destination_address: ~p~n",[inet_parse:ntoa(Daddr)]), 
+            lager:notice("destination_port: ~p~n",[epcap_port_lib:port(sport, Hdr)]), 
+	    lager:notice("protocol: ~p~n",[pkt:proto(Proto)]), 
+	    lager:notice("protocol_header: ~p~n",[epcap_port_lib:header(Hdr)]),
+	    lager:notice("payload_bytes: ~p~n", [byte_size(Payload)]), 
+            lager:notice("payload: ~p~n", [epcap_port_lib:to_ascii(Payload)])
     end,
-    {noreply, State};
+    StateNew = State#state{received_packets = State#state.received_packets+1, received_bytes= State#state.received_bytes + byte_size(Payload)},
+    {noreply, StateNew};
 handle_info(_Info, State) -> 
     {noreply, State}.
 
@@ -219,7 +224,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, State) ->
+    lager:notice("Received packages: ~p, Received bytes: ~p~n",[State#state.received_packets, State#state.received_bytes]),
     ok.
 
 %%--------------------------------------------------------------------
@@ -236,3 +242,22 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+print_result([], _Payload, _Saddr, _Sport, _Daddr, _Dport, _Proto, _State) ->
+            ok;
+
+print_result([{Start, Length}|StartLengthListTail], Payload, Saddr,Sport, Daddr, Dport, Proto, State) ->
+            <<_Ignore:Start/binary, Found/binary>> = <<Payload/binary>>,
+	    <<Result:Length/binary, _Rest/binary>> = <<Found/binary>>, 
+	    lager:notice("Logging: Instance: ~p, PID: ~p",[State#state.instance, self()]),
+	    lager:notice("Message: ~p, ~n~nPattern found: ~p~n",[State#state.message, epcap_port_lib:to_ascii(Result)]),
+	    lager:notice("Received packages: ~p, Received bytes: ~p~n",[State#state.received_packets, State#state.received_bytes]),
+	    lager:notice("Self: ~p~n", [self()]),
+            lager:notice("source_address: ~p~n", [Saddr]),
+	    lager:notice("source_port: ~p~n", [Sport]), 
+	    lager:notice("destination_address: ~p~n", [Daddr]), 
+	    lager:notice("destination_port: ~p~n", [Dport]), 
+	    lager:notice("protocol: ~p~n", [Proto]),
+	    lager:notice("Pattern starting: ~p~n", [State#state.received_bytes+Start]), 
+	    lager:notice("Pattern ending: ~p~n", [State#state.received_bytes+Length]),
+            lager:notice("Found pattern: ~p~n", [epcap_port_lib:to_ascii(Result)]),
+            print_result(StartLengthListTail, Payload, Saddr,Sport, Daddr, Dport, Proto, State).

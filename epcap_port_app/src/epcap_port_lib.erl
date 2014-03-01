@@ -31,17 +31,83 @@
 -module(epcap_port_lib).
 -include_lib("pkt/include/pkt.hrl").
 
--export([decode/2,
+-export([decode/3,
 	 ether_addr/1, 
 	 header/1, 
-	 iso_8601_fmt/1, 
-	 payload/1,
-	 port/2, 
-	 tcp_flags/1, 
+	 iso_8601_fmt/1,
+         packet/2, 
 	 timestamp/1,
 	 to_ascii/1]).
 
 -define(is_print(C), C >= $ , C =< $~).
+
+%% Taken from sniff example:
+
+decode(DLT, Data, _Crash = true) ->
+    pkt:decapsulate({pkt:dlt(DLT), Data});
+decode(DLT, Data, _Crash = false) ->
+    case pkt:decode(pkt:dlt(DLT), Data) of
+        {ok, {Headers, Payload}} ->
+            Headers ++ [Payload];
+        {error, SoFar, _Failed} ->
+            SoFar
+    end.
+
+header(Payload) ->
+    header(Payload, []).
+
+header([], Acc) ->
+    lists:reverse(Acc);
+header([#ether{shost = Shost, dhost = Dhost}|Rest], Acc) ->
+    header(Rest, [{ether, [{source_macaddr, ether_addr(Shost)},
+                    {destination_macaddr, ether_addr(Dhost)}]}|Acc]);
+header([#ipv4{saddr = Saddr, daddr = Daddr, p = Proto}|Rest], Acc) ->
+    header(Rest, [{ipv4, [{protocol, pkt:proto(Proto)},
+                    {source_address, inet_parse:ntoa(Saddr)},
+                    {destination_address, inet_parse:ntoa(Daddr)}]}|Acc]);
+header([#ipv6{saddr = Saddr, daddr = Daddr, next = Proto}|Rest], Acc) ->
+    header(Rest, [{ipv6, [{protocol, pkt:proto(Proto)},
+                    {source_address, inet_parse:ntoa(Saddr)},
+                    {destination_address, inet_parse:ntoa(Daddr)}]}|Acc]);
+header([#tcp{sport = Sport, dport = Dport, ackno = Ackno, seqno = Seqno,
+            win = Win, cwr = CWR, ece = ECE, urg = URG, ack = ACK, psh = PSH,
+            rst = RST, syn = SYN, fin = FIN}|Rest], Acc) ->
+    Flags = [ F || {F,V} <- [{cwr, CWR}, {ece, ECE}, {urg, URG}, {ack, ACK},
+                   {psh, PSH}, {rst, RST}, {syn, SYN}, {fin, FIN} ], V =:= 1 ],
+    header(Rest, [{tcp, [{source_port, Sport}, {destination_port, Dport},
+                    {flags, Flags}, {seq, Seqno}, {ack, Ackno}, {win, Win}]}|Acc]);
+header([#udp{sport = Sport, dport = Dport, ulen = Ulen}|Rest], Acc) ->
+    header(Rest, [{udp, [{source_port, Sport}, {destination_port, Dport},
+                    {ulen, Ulen}]}|Acc]);
+header([#icmp{type = Type, code = Code}|Rest], Acc) ->
+    header(Rest, [{icmp, [{type, Type}, {code, Code}]}|Acc]);
+header([#icmp6{type = Type, code = Code}|Rest], Acc) ->
+    header(Rest, [{icmp6, [{type, Type}, {code, Code}]}|Acc]);
+header([Hdr|Rest], Acc) when is_tuple(Hdr) ->
+    header(Rest, [{header, Hdr}|Acc]);
+header([Payload|Rest], Acc) when is_binary(Payload) ->
+    header(Rest, [{payload, to_ascii(Payload)},
+            {payload_size, byte_size(Payload)}|Acc]).
+
+packet(Format, Bin) ->
+    packet(Format, Bin, []).
+packet([], _Bin, Acc) ->
+    lists:reverse(Acc);
+packet([binary|Rest], Bin, Acc) ->
+    packet(Rest, Bin, [{packet, Bin}|Acc]);
+packet([hex|Rest], Bin, Acc) ->
+    packet(Rest, Bin, [{packet, to_hex(Bin)}|Acc]).
+
+to_ascii(Bin) when is_binary(Bin) ->
+    [ to_ascii(C) || <<C:8>> <= Bin ];
+to_ascii(C) when ?is_print(C) -> C;
+to_ascii(_) -> $..
+
+to_hex(Bin) when is_binary(Bin) ->
+    [ integer_to_list(N, 16) || <<N:8>> <= Bin ].
+
+ether_addr(MAC) ->
+    string:join(to_hex(MAC), ":").
 
 timestamp(Now) when is_tuple(Now) ->
     iso_8601_fmt(calendar:now_to_local_time(Now)).
@@ -49,54 +115,4 @@ timestamp(Now) when is_tuple(Now) ->
 iso_8601_fmt(DateTime) ->
     {{Year,Month,Day},{Hour,Min,Sec}} = DateTime,
     lists:flatten(io_lib:format("~4.10.0B-~2.10.0B-~2.10.0B ~2.10.0B:~2.10.0B:~2.10.0B",
-				[Year, Month, Day, Hour, Min, Sec])).
-
-header(#tcp{ackno = Ackno, seqno = Seqno, win = Win} = Hdr) ->
-    [{flags, tcp_flags(Hdr)},
-     {seq, Seqno},
-     {ack, Ackno},
-     {win, Win}];
-header(#udp{ulen = Ulen}) ->
-    [{ulen, Ulen}];
-header(#icmp{code = Code, type = Type}) ->
-    [{type, Type},
-     {code, Code}];
-header(Packet) ->
-    Packet.
-
-port(sport, #tcp{sport = SPort}) -> SPort;
-port(sport, #udp{sport = SPort}) -> SPort;
-port(dport, #tcp{dport = DPort}) -> DPort;
-port(dport, #udp{dport = DPort}) -> DPort;
-port(_,_) -> "".
-
-payload(Payload) ->
-    [ to_ascii(C) || <<C:8>> <= Payload ].
-
-to_ascii(C) when ?is_print(C) -> C;
-to_ascii(_) -> $..
-
-ether_addr(B) when is_binary(B) ->
-    ether_addr(binary_to_list(B));
-ether_addr(L) when is_list(L) ->
-    [ hd(io_lib:format("~.16B", [N])) || N <- L ].
-
-tcp_flags(#tcp{cwr = CWR, ece = ECE, urg = URG, ack = ACK,
-	       psh = PSH, rst = RST, syn = SYN, fin = FIN}) ->
-    [ F || {F,V} <- [
-		     {cwr, CWR},
-		     {ece, ECE},
-		     {urg, URG},
-		     {ack, ACK},
-		     {psh, PSH},
-		     {rst, RST},
-		     {syn, SYN},
-		     {fin, FIN}
-		    ], V =:= 1 ].
-
-decode(ether, Packet) ->
-    pkt:decapsulate({ether, Packet});
-decode(DLT, Packet) ->
-						% Add a fake ethernet header
-    [_Linktype, IP, Hdr, Payload] = pkt:decapsulate({DLT, Packet}),
-    [#ether{}, IP, Hdr, Payload].
+            [Year, Month, Day, Hour, Min, Sec])).
