@@ -1,0 +1,4 @@
+{application, common, [
+    {description, "common code"},
+    {vsn, "0.0.1"}
+]}.
