@@ -579,7 +579,6 @@ check_tcp_port_for_non_zero(_SPort, _Dport=0) ->
 check_tcp_port_for_non_zero(_SPort, _Dport) ->
         ok.
 
-
 pretty_print_list(List) ->
         pretty_print_list(List, []).
 

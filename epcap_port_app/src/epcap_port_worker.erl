@@ -282,10 +282,6 @@ debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded,Pid, Pid_list) ->
     lager:debug("Value:Opt:~p~n", [Opt]),
     lager:debug("Sending message to PID_list~p, Pid~p~n",[[Pid|Pid_list],[Pid]]).
 
-
-
-
-
 pretty_print_list(List) ->
         pretty_print_list(List, []).
 
