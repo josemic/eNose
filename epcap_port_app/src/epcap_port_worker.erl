@@ -259,9 +259,9 @@ send_messages([Pid|Pid_list], Data) ->
 		{epcap,eof} ->
 		    lager:notice("Last packet from file received");
 		{error,[EtherIgnore, IP], SofarBinary} ->
-		    lager:warning("Invalid packet received: Unable to decode packet:~p, ~p~n", [common_pretty_print:pretty_print_list([EtherIgnore, IP]), SofarBinary]);
+		    lager:warning("Invalid packet received: Unable to decode packet:~p, ~p~n", [pretty_print_list([EtherIgnore, IP]), SofarBinary]);
 		{error,[EtherIgnore], SofarBinary} ->
-		    lager:warning("Invalid packet received: Unable to decode packet:~p, ~p~n", [common_pretty_print:pretty_print_list([EtherIgnore]), SofarBinary])
+		    lager:warning("Invalid packet received: Unable to decode packet:~p, ~p~n", [pretty_print_list([EtherIgnore]), SofarBinary])
 	    end
     end.
 
@@ -281,4 +281,12 @@ debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded,Pid, Pid_list) ->
     Opt = pkt_tcp:options(OptBinary),
     lager:debug("Value:Opt:~p~n", [Opt]),
     lager:debug("Sending message to PID_list~p, Pid~p~n",[[Pid|Pid_list],[Pid]]).
+
+pretty_print_list(List) ->
+        pretty_print_list(List, []).
+
+pretty_print_list([H|T], Acc) ->
+        pretty_print_list(T,[lager:pr(H,?MODULE)|Acc]);
+pretty_print_list([], Acc) ->
+        lists:reverse(Acc). 
 
