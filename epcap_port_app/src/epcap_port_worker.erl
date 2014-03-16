@@ -242,34 +242,40 @@ send_messages([], _Data) ->
 send_messages([Pid|Pid_list], Data) ->
     Pid ! binary_to_term(Data),
     case binary_to_term(Data) of
-         {packet, DLT, Time, Len, DataDecoded} ->
-               Packet = pkt:decode(pkt:dlt(DLT), DataDecoded),
-               %%io:format("~nDecoded: ~w~n",[Packet]),
-               {ok,{[_EtherIgnore, IP, TCP], _PayloadPadded}} = Packet,
-               {Saddr, Daddr, _Proto} = case IP of
-    				 #ipv4{saddr = S, daddr = D, p = P} ->
-    				     {S,D,P};
-    
-    				 #ipv6{saddr = S, daddr = D, next = P} ->
-    				     {S,D,P}
-    			     end,
-                debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded, Pid, Pid_list),
-                send_messages(Pid_list, Data);
-          {epcap,eof} ->
-                lager:notice("Last packet from file received")
-     end.
+	{packet, DLT, Time, Len, DataDecoded} ->
+	    Packet = pkt:decode(pkt:dlt(DLT), DataDecoded),
+	    %%io:format("~nDecoded: ~w~n",[Packet]),
+	    case Packet of
+		{ok,{[_EtherIgnore, IP, TCP], _PayloadPadded}}->
+		    {Saddr, Daddr, _Proto} = case IP of
+						 #ipv4{saddr = S, daddr = D, p = P} ->
+						     {S,D,P};
+
+						 #ipv6{saddr = S, daddr = D, next = P} ->
+						     {S,D,P}
+					     end,
+		    debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded, Pid, Pid_list),
+		    send_messages(Pid_list, Data);
+		{epcap,eof} ->
+		    lager:notice("Last packet from file received");
+		{error,[EtherIgnore, IP], SofarBinary} ->
+		    lager:warning("Invalid packet received: Unable to decode packet:~p, ~p~n", [common_pretty_print:pretty_print_list([EtherIgnore, IP]), SofarBinary]);
+		{error,[EtherIgnore], SofarBinary} ->
+		    lager:warning("Invalid packet received: Unable to decode packet:~p, ~p~n", [common_pretty_print:pretty_print_list([EtherIgnore]), SofarBinary])
+	    end
+    end.
 
 debug_messages(TCP, Saddr, Daddr, DLT, Time, Len, DataDecoded,Pid, Pid_list) ->
     %%io:format("~nCaptured: ~p~n",[binary_to_term(Data)]),
     Source_address = inet_parse:ntoa(Saddr),
-    Destination_address = Daddr,
+    Destination_address = inet_parse:ntoa(Daddr),
     #tcp{sport = Sport, dport = Dport, ackno = Ackno, seqno = Seqno,
          win = Win, cwr = _CWR, ece = _ECE, urg = _URG, ack = ACK, psh = _PSH,
          rst = RST, syn = SYN, fin = FIN, opt = OptBinary} = TCP,
-        lager:debug("Value:{Ack:~p, Syn:~p, Fin:~p, _Rst:~p, SEG_SEQ:~p:~p, SEG_ACK:~p, SEG_WND:~p},~n
+    lager:debug("Value:{Ack:~p, Syn:~p, Fin:~p, _Rst:~p, SEG_SEQ:~p:~p, SEG_ACK:~p, SEG_WND:~p},~n
         {{Sender_address:~p, Sender_port:~p},~n
-        {Receiver_address:~p, Receiver_port:~p}},~n
-         _DLT:~p, _Time:~p, _Len:~p}~n", [ACK, SYN, FIN, RST, Seqno, Seqno+Len, Ackno, Win, Source_address, TCP#tcp.sport, 
+	 {Receiver_address:~p, Receiver_port:~p}},~n
+		_DLT:~p, _Time:~p, _Len:~p}~n", [ACK, SYN, FIN, RST, Seqno, Seqno+Len, Ackno, Win, Source_address, TCP#tcp.sport, 
         Destination_address, TCP#tcp.dport, DLT, Time, Len]),
         
     Opt = pkt_tcp:options(OptBinary),

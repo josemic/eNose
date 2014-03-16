@@ -122,7 +122,8 @@
           initiator_sack_store::[tuple()],
           responder_sack_store::[tuple()],
           responder, % record connection
-          initiator  % record connection
+          initiator, % record connection
+          crash_upon_unexpected_package::boolean()
 	 }).
 
 -record(connection, {
@@ -218,7 +219,8 @@ init([Instance,{Direction=initiator, IP, TCP, Decoded}, ChildWorkerList]) ->
                initiator_retransmission_index = 0,
                responder_retransmission_index = 0,
                initiator_sack_store=[],
-               responder_sack_store=[]        
+               responder_sack_store=[],
+               crash_upon_unexpected_package = false        
 	      },
     {ok, _Timeout, StateNew} = handle_initial_syn_or_syn_after_reset(?current_function_name(), New_state_name = state_syn_sent, {Direction, IP, TCP, Decoded}, State), 
     {ok, New_state_name, StateNew}.
@@ -273,7 +275,11 @@ state_listen(
 
 state_listen(timeout, State) ->
     lager:info("Closing Instance: ~p~n in state~p~n", [State#state.instance, ?current_function_name()]),
-    {stop, shutdown, State}.
+    {stop, shutdown, State};
+
+state_listen(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_syn_sent(
   {Direction = responder, 
@@ -338,7 +344,11 @@ state_syn_sent(
    Decoded
   }, State) -> 
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_listen, {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_syn_sent(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_syn_syn_ack_sent( % unclear, whether this is needed
   {Direction = initiator, 
@@ -393,7 +403,11 @@ state_syn_syn_ack_sent(
    #decoded{payload_size = 0} = Decoded
   }, State) -> 
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_listen, {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_syn_syn_ack_sent(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_syn_received( % Ack
   {Direction = initiator, 
@@ -429,7 +443,11 @@ state_syn_received( % Rst as connection responder received, see RFC 793, p. 37. 
    #decoded{payload_size = 0} = Decoded
   }, State) -> 
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_listen, {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_syn_received(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_established( % payload, Note: if ack == 0, seqno should be 0
   {Direction, % initiator or responder  
@@ -465,7 +483,11 @@ state_established(
    Decoded
   }, State) ->
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_established(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_fin_wait_1( % Fin-Ack
   {Direction, % close_responder
@@ -546,7 +568,11 @@ state_fin_wait_1( % Syn-Ack repeatition by connection initiator, connection resp
   }, State) when
       Direction == State#state.close_responder -> 
     {ok, Timeout, StateNew}= handle_retransmission(NextStateName = ?current_function_name(), {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_fin_wait_1(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_fin_wait_2(
   {Direction, 
@@ -606,7 +632,11 @@ state_fin_wait_2( % Rst by connection close responder
   }, State) when
       Direction == State#state.close_responder-> 
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_fin_wait_2(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_closing_ack(
   {Direction, % Ack from close initiator
@@ -625,7 +655,11 @@ state_closing_ack( % Rst
    Decoded
   }, State) -> 
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_closing_ack(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_closing(
   {Direction, % Ack from close responder
@@ -644,15 +678,19 @@ state_closing( % Rst
    Decoded
   }, State) -> 
     {ok, NextStateName, Timeout, StateNew}= handle_reset(?current_function_name(), state_time_wait, {Direction, IP, TCP, Decoded}, State),
-    {next_state, NextStateName, StateNew, Timeout}.
+    {next_state, NextStateName, StateNew, Timeout};
+
+state_closing(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 state_time_wait( % Ack retransmission
-  {Direction, 
-   IP, 
-   #tcp{ack=1, syn=0, fin=0, rst=0}=TCP, 
+  {Direction,
+   IP,
+   #tcp{ack=1, syn=0, fin=0, rst=0}=TCP,
    Decoded
   }, State) when
-      Direction == State#state.close_responder-> 
+      Direction == State#state.close_responder->
     {ok, Timeout, StateNew}= handle_retransmission(NextStateName = ?current_function_name(), {Direction, IP, TCP, Decoded}, State),
     {next_state, NextStateName, StateNew, Timeout};
 
@@ -706,7 +744,11 @@ state_time_wait( % Rst
 state_time_wait(timeout, State) ->
     lager:info("Closing Instance: ~p in state: ~p, sent_packets: ~p, sent_bytes: ~p~n", [State#state.instance, ?current_function_name(), State#state.sent_packets, State#state.sent_bytes]),
     StateNew = State, 
-    {stop, shutdown, StateNew}.
+    {stop, shutdown, StateNew};
+
+state_time_wait(UnexpectedPacket, State) when State#state.crash_upon_unexpected_package == false->
+    {ok, Timeout, StateNew}= handle_unexpected_packet(?current_function_name(), UnexpectedPacket, State),
+    {next_state, StateNew, Timeout}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -1514,14 +1556,14 @@ handle_reset(Current_state_name, New_state_name, {Direction, _IP, TCP, Decoded},
 	true ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, New_state_name, reset_in_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
             StateNew1  = StateNew0#state{initiator_syn_seg_seq_stack = stack_element(TCP#tcp.seqno, stack_new(?MaxNumberOfSynSegSeqOnStack))}, % clear stack due to reset!!
-            Timeout = infinity, 
             NextStateName = New_state_name,
+            {ok, Timeout} = set_timeout(NextStateName),
             StateNew  = StateNew1;
         false ->
             StateNew0 = ?DEBUG_LOG({{?current_function_name(), Current_state_name, Current_state_name, reset_out_of_sequence}, lists:keyfind(window_scale, 1, Decoded#decoded.opt_decoded)}, Direction, _IP, TCP, Decoded, State),
 	    lager:warning("Received packet with sequence number outside window!! Direction:~w, SEG_SEQ: ~w, Payload_size ~w, RCV_NXT: ~w, RCV_WND: ~w~n", [Direction, TCP#tcp.seqno, Decoded#decoded.payload_size, get_RCV_NXT(Direction, State), calculate_window(reverse(Direction), State)]),
-            Timeout = infinity,
             NextStateName = Current_state_name,
+            {ok, Timeout} = set_timeout(NextStateName),
 	    StateNew  = StateNew0
     end, 
     {ok, NextStateName, Timeout, StateNew}.
@@ -1583,6 +1625,13 @@ handle_ignore(Current_state_name, {Direction, _IP, TCP, Decoded}, State) -> % pa
     {ok, Timeout} = set_timeout(NextStateName),
     {ok, Timeout, StateNew}.
 
+handle_unexpected_packet(Current_state_name, UnexpectedPacket, State) ->
+    lager:warning("Unexpected packets received: instance: ~p, state: ~p~n packet: ~p~n", 
+                 [State#state.instance, ?current_function_name(), lager:pr(UnexpectedPacket,?MODULE)]),
+    NextStateName = Current_state_name,
+    {ok, Timeout} = set_timeout(NextStateName),
+    {ok, Timeout, NextStateName}.
+
 set_timeout(State_name) ->
     Timeout = case State_name == state_time_wait of
 		  true ->
@@ -1591,3 +1640,9 @@ set_timeout(State_name) ->
 		      infinity
 	      end, 
     {ok, Timeout}.
+
+
+
+
+
+
