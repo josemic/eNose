@@ -48,9 +48,9 @@ decode(DLT, Data, _Crash = true) ->
 decode(DLT, Data, _Crash = false) ->
     case pkt:decode(pkt:dlt(DLT), Data) of
         {ok, {Headers, Payload}} ->
-            Headers ++ [Payload];
+            {ok, Headers ++ [Payload]};
         {error, SoFar, _Failed} ->
-            SoFar
+            {failed, SoFar, _Failed}
     end.
 
 header(Payload) ->

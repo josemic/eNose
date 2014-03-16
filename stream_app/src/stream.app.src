@@ -1,5 +1,5 @@
 {application, stream, [
-    {description, "packet streammentation engine"},
+    {description, "packet stream engine"},
     {vsn, "0.0.1"},
     {registered,[stream_server, stream_root_sup]},
     {applications, [kernel]},
