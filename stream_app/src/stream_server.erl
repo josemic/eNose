@@ -225,7 +225,7 @@ handle_info({packet, DLT, _Time, _Len, Data}, State) ->
             StateNew = handle_received_packet(Packet, DLT, _Time, _Len, Data, State);
 	{failed, SoFarDecoded, DecodingFailed} ->
 	    %% drop packet and issue warning
-	    lager:warning("Invalid packet received: Decoded: ~p Decoding Failed: ~p~n", [common_pretty_print:pretty_print_list(SoFarDecoded), lager:pr(DecodingFailed, ?MODULE)]),
+	    lager:warning("Invalid packet received: Decoded: ~p Decoding Failed: ~p~n", [pretty_print_list(SoFarDecoded), lager:pr(DecodingFailed, ?MODULE)]),
 	    StateNew = State
     end,
     {noreply, StateNew};
@@ -335,43 +335,43 @@ handle_received_packet(Packet, DLT, _Time, _Len, Data, State) ->
 				 Res1 = check_invalid_ip4_address(S,D),
 				 Result1 = case Res1 of
 					       equal -> 
-						   lager:warning("Source address matches Destination address !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Source address matches Destination address !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       source_ip4_address_invalid_end_0 ->
-						   lager:warning("Source address ends on 0 !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Source address ends on 0 !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       source_ip4_address_invalid_end_255 -> 
-						   lager:warning("Source address ends on 255 , Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Source address ends on 255 , Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       destination_address_invalid_end_0 -> 
-						   lager:warning("Destination address ends on 0 !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Destination address ends on 0 !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       destination_address_invalid_end_255 -> 
-						   lager:warning("Destination address ends on 255 !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Destination address ends on 255 !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       source_address_invalid_start_10 -> 
-						   lager:warning("Source address starts with 10 !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Source address starts with 10 !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       destination_address_invalid_start_10 -> 
-						   lager:warning("Destination address starts with 10 !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Destination address starts with 10 !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       source_address_invalid_start_172_xx -> 
-						   lager:warning("Source address‎ is in range 192.16.x.x - 192.31.x.x !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Source address‎ is in range 192.16.x.x - 192.31.x.x !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       destination_address_invalid_start_172_xx -> 
-						   lager:warning("Destination address is in range 192.16.x.x - 192.31.x.x !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Destination address is in range 192.16.x.x - 192.31.x.x !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       source_address_invalid_start_192_168 -> 
-						   lager:warning("Source address starts with 192.168 !, Decoded: ~w~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Source address starts with 192.168 !, Decoded: ~w~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       destination_address_invalid_start_192_168 -> 
-						   lager:warning("Destination address starts with 192.168 !, Decoded: ~w~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Destination address starts with 192.168 !, Decoded: ~w~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       source_address_invalid_start_169_254 -> 
-						   lager:warning("Source address starts with 169.254 !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Source address starts with 169.254 !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       destination_address_invalid_start_169_254 -> 
-						   lager:warning("Destination address starts with 169.254 !, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Destination address starts with 169.254 !, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       different ->
 						   true
@@ -387,14 +387,14 @@ handle_received_packet(Packet, DLT, _Time, _Len, Data, State) ->
 					  TCP#tcp.fin),
 				 Result2 = case Res2 of
 					       null -> 
-						   lager:warning("Invalid packet received: Flags CWR = ECE = URG = ACK = PSH = RST = SYN = FIN = 0 !~n, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Invalid packet received: Flags CWR = ECE = URG = ACK = PSH = RST = SYN = FIN = 0 !~n, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 
 					       syn_fin ->
-						   lager:warning("Invalid packet received: Flags SYN = FIN = 1 !~n, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Invalid packet received: Flags SYN = FIN = 1 !~n, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       fin_only ->
-						   lager:warning("Invalid packet received: Flags CWR = ECE = URG = ACK = PSH = RST = SYN = 0, FIN = 1 !~n, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+						   lager:warning("Invalid packet received: Flags CWR = ECE = URG = ACK = PSH = RST = SYN = 0, FIN = 1 !~n, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 						   false;
 					       ok ->
 						   true
@@ -412,7 +412,7 @@ handle_received_packet(Packet, DLT, _Time, _Len, Data, State) ->
 			     {true, Val}
 		     catch
 			 _:_ -> 
-			     lager:warning("Invalid TCP options field received !~n, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+			     lager:warning("Invalid TCP options field received !~n, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 			     {fail, undefined}
 		     end,
     Res4 = check_tcp_port_for_non_zero(
@@ -420,10 +420,10 @@ handle_received_packet(Packet, DLT, _Time, _Len, Data, State) ->
 	     TCP#tcp.dport),
     Result4 = case Res4 of
 		  sport_is_zero -> 
-		      lager:warning("Invalid packet received: Source port = 0 !~n, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+		      lager:warning("Invalid packet received: Source port = 0 !~n, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 		      false;
 		  dport_is_zero -> 
-		      lager:warning("Invalid packet received: Destination port = 0 !~n, Decoded: ~p~nIgnoring packet~n", [common_pretty_print:pretty_print_list(Packet)]),
+		      lager:warning("Invalid packet received: Destination port = 0 !~n, Decoded: ~p~nIgnoring packet~n", [pretty_print_list(Packet)]),
 		      false;
 		  ok ->
 		      true
@@ -580,3 +580,10 @@ check_tcp_port_for_non_zero(_SPort, _Dport) ->
         ok.
 
 
+pretty_print_list(List) ->
+        pretty_print_list(List, []).
+
+pretty_print_list([H|T], Acc) ->
+        pretty_print_list(T,[lager:pr(H,?MODULE)|Acc]);
+pretty_print_list([], Acc) ->
+        lists:reverse(Acc). 
