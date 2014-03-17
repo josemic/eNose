@@ -1,4 +1,3 @@
-
 eNose
 ======
 
@@ -9,7 +8,7 @@ eNose
 
 ## features:
 
-- epcap_app:
+# epcap_app:
 + traces the incoming IP packages coming from pcap
 + Currently supports only for TCP traffic (UDP is ignored)
 + Only for IP4 checksum filtering has been done.
@@ -18,14 +17,14 @@ eNose
 + dropps IP4 packages with invalid TCP or IP4 checksum
 + Packets from epcap_app to be forwarded to the stream_app or directly to the content app
 
-- stream_app:
+# stream_app:
 + tracks sequence numbers and Acks
 + handles retransmission of TCP packages
 + collects pieces of 1500 bytes to be forwarded to the content_app
 
-- content_app:
+# content_app:
 + this is the content filtering
-+ Decent search performance is only achieved by using erlang binary search. See example s12:s() for network interfaces e.g. "eth0" or s12:s() for "eth1".
++ Decent search performance is only achieved by using erlang binary search. See example s12:s(ethX) for network interfaces ethX e.g. "eth0" or "eth1".
 
 ## Preconditions
 
@@ -36,12 +35,12 @@ eNose
    Therefore before using the this program, check that all tcp checksum offloading had been deactivated.
 
    su 
-   ethtool --show-offload eth0
-   E.g.:
-   > 
-   > generic-receive-offload: on
-   >
-
+   ethtool --show-offload eth0 <br>
+   Shows e.g.:
+   
+   generic-receive-offload: on
+   
+   
    If e.g. generic-receive-offloading is activated, deactiavte it using the following command:
 
    ethtool -K eth0 gro off
@@ -55,6 +54,14 @@ eNose
    For Ubuntu 13.10 the following apply:
 
    sudo ethtool -K eth0 rx off tx off tso off sg off gro off
+   
+   Actually already this might be sufficient when running eNose in conjunction with a switch using port mirroring on a managed port:
+   sudo ethtool -K eth0 rx on tx on tso off sg off gro off gso off
+
+   If you find when running eNose in the file (./log/console.log) warings "Acknowledgement out of Window" without ending when downloading e.g. 900 MByte large files, then it is a sign that insufficient network card offloading features have been deactivated with ethtool. See above.))   
+   
+   Here such an Error message example from ./log/console.log: <br>
+   2014-03-16 18:08:31.222 [warning] <0.99.0>@stream_worker:checkSAckReceptionBuffer:1324 checkSAckReceptionBuffer: Acknowledgement out of Window, Direction:responder, SEG_SEQ32:2501116383:2501117843 , SEG_ACK32:2501999683, RCV_NXT:2501116383, Window:212992
 
    Note:
    Deactivation of checksum offloading is currently broken on Debian stable (Whezzy) and Debian testing (Jessie).
@@ -94,6 +101,7 @@ eNose
     Note:
     - after changing the search pattern, "make all" must be called
     - Erlang must be restrated.
+    - The Observer must be reattached to erlang shell 1.
 
     On shell 1:
 
@@ -104,10 +112,12 @@ eNose
     ./rebar get-deps (if downloading of dependencies had failed)
 
 
-    ./start.sh (starts erlang shell with right coockie and path)
+    ./start.sh ethX 
+    
+    Starts erlang shell with right coockie and path and starts the function s12:s(ethX), where ethX is the interface of the used network port X. Please replace X as the appropriate number.
 
-    In Erlang shall:
-    s12_1:s().
+    Alternatively call from Erlang shell directly, if you should have removed "-s s12 s $1" from file ./start.sh:
+    s12_1:s(ethX).
 
 
 
@@ -115,13 +125,13 @@ eNose
     cd eNose
 
     run:
-    ./observer.sh (starts the observer)
+    ./observer.sh (starts the Erlang observer)
     In the observer select Nodes -> eNose...
  
 
 ## USAGE
 
-    This applies to the files called by ./start.sh, ./start_from_file.sh located in the example directory:
+    This applies to the function e.g. s12:s(ethX) located in the example directory and called by ./start.sh, ./start_from_file.sh:
 
     {ok, Roleback} = rule:start([{AppName1,[{key1, value1}, {key2, value2}, ...]}, {AppName2,[{key1, value1}, {key2, value2}, ...]}, ..., {AppNameN,[{key1, value1}, {key2, value2}]}).
 
@@ -141,6 +151,9 @@ eNose
 
     3) content:
         It filters content received from epcap_port or from defrag based upon strings and prints the results.
+        Note: 
+        Filtering does not yet work correctly with bidirectional interleaved traffic such as from XMPP protocol.
+        This will be fixed soon. 
 
 ## PF_RING -- currently not tested ----
         This section refers to epcap, not to the epcap_port app and is automatically downloaded 
@@ -176,6 +189,8 @@ tbd.
 
 * make it distributed application
 * add futher applications
+* add application protocol detection such as http, ftp, ..
+* add application dependent traffic filtering such as http:, ftp:
 
 ## Interesting Books:
 
@@ -184,6 +199,8 @@ Erlang and OTP in Action, Martin Logan, Eric Merritt, Richard Carlsson / for Erl
 For intrusion detection:
 Snort 2.0 Intrusion Detectionby Brian Caswell, Jeffrey Pusluns and Jay Beale from Syngress Media (May 1st 2003) 
 
+See also the wiki:
+https://github.com/josemic/eNose/wiki
 
 ## CONTRIBUTORS
 
