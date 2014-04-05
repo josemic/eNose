@@ -222,8 +222,8 @@ init([Instance,{Direction=initiator, IP, TCP, Decoded}, ChildWorkerList]) ->
                responder_sack_store=[],
                crash_upon_unexpected_package = false        
 	      },
-    {ok, _Timeout, StateNew} = handle_initial_syn_or_syn_after_reset(?current_function_name(), New_state_name = state_syn_sent, {Direction, IP, TCP, Decoded}, State), 
-    {ok, New_state_name, StateNew}.
+    {ok, Timeout, StateNew} = handle_initial_syn_or_syn_after_reset(?current_function_name(), New_state_name = state_syn_sent, {Direction, IP, TCP, Decoded}, State), 
+    {ok, New_state_name, StateNew, Timeout}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -247,8 +247,8 @@ state_listen( % this state ocurrs only after reset
    #tcp{ack=0, syn=1, fin=0, rst=0}=TCP, 
    #decoded{payload_size = 0} = Decoded
   }, State) ->
-    {ok, StateNew} = handle_initial_syn_or_syn_after_reset(?current_function_name(), New_state_name = state_syn_sent, {Direction, IP, TCP, Decoded}, State), 
-    {ok, New_state_name, StateNew};
+    {ok, Timeout, StateNew} = handle_initial_syn_or_syn_after_reset(?current_function_name(), New_state_name = state_syn_sent, {Direction, IP, TCP, Decoded}, State), 
+    {ok, New_state_name, StateNew, Timeout};
 
 state_listen(
   {Direction,  %% unclear, whether that applies ony for initiator. To be checked. 
