@@ -454,11 +454,18 @@ handle_received_packet(Packet, DLT, _Time, _Len, Data, State) ->
 				    [0,0] ->
 					true;
 				    [_,_] ->
-					?DEBUG("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum: ~p, TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
+					?DEBUG("Wrong IPv4 checksum: {S:~p,D:~p,P:~p} {IPSum: ~p, TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
 					false
 				end;
 			    #ipv6{} ->
-				true % checksum not implemented for ipv6 
+				TCPSum = pkt:makesum([IP, TCP, Payload]),
+				case TCPSum of 
+				    0 ->
+					true;
+				    _ ->
+					?DEBUG("Wrong IPv6 checksum: {S:~p,D:~p,P:~p} {TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv6.saddr,IP#ipv6.daddr,IP#ipv6.next, TCPSum, Data, DLT, Packet]),
+					false
+				end
 			end,
 	    case Chksum_ok of
 		true ->
@@ -502,11 +509,18 @@ handle_received_packet(Packet, DLT, _Time, _Len, Data, State) ->
 				    [0,0] ->
 					true;
                                     [_,_] ->
-					?DEBUG("Wrong checksum: {S:~p,D:~p,P:~p} {IPSum: ~p, TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
+					?DEBUG("Wrong IPv4 checksum: {S:~p,D:~p,P:~p} {IPSum: ~p, TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv4.saddr,IP#ipv4.daddr,IP#ipv4.p, IPSum, TCPSum, Data, DLT, Packet]),
 					false
 				end;
 			    #ipv6{} ->
-				true % checksum not implemented for ipv6 
+				TCPSum = pkt:makesum([IP, TCP, Payload]),
+				case TCPSum of 
+				    0 ->
+					true;
+				    _ ->
+					?DEBUG("Wrong IPv6 checksum: {S:~p,D:~p,P:~p} {TCPSum: ~p}~n Data:~p~n, DLT:~p~n, Decoded~w~n", [IP#ipv6.saddr,IP#ipv6.daddr,IP#ipv6.next, TCPSum, Data, DLT, Packet]),
+					false
+				end
 			end,
 	    case Chksum_ok of
                 true -> 
